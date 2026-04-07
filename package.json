@@ -1,15 +1,14 @@
 {
   "name": "qc-bot",
   "version": "1.0.0",
-  "description": "Telegram QC Bot",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.102.0",
-    "dotenv": "^16.6.1",
-    "node-cron": "^4.2.1",
-    "node-telegram-bot-api": "^0.61.0"
+    "dotenv": "^16.0.0",
+    "node-telegram-bot-api": "^0.61.0",
+    "node-cron": "^3.0.2",
+    "@supabase/supabase-js": "^2.0.0"
   }
 }
