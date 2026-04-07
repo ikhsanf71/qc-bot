@@ -10,6 +10,13 @@ console.log("🚀 BOT STARTING...");
 // ==========================
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
+console.log("ENV CHECK:", {
+  BOT_TOKEN: process.env.BOT_TOKEN,
+  SUPABASE_URL: process.env.SUPABASE_URL,
+  SUPABASE_KEY: process.env.SUPABASE_KEY,
+  GROUP_ID: process.env.GROUP_ID
+});
+
 // ==========================
 // 🔥 ERROR HANDLER (WAJIB)
 // ==========================
