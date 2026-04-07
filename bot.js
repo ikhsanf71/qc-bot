@@ -16,7 +16,7 @@ const supabase = createClient(
 // ==========================
 // 👑 ADMIN
 // ==========================
-const ADMINS = [5109637592]; // ganti dengan userId lo
+const ADMINS = [5109637592];
 
 function isAdmin(id) {
   return ADMINS.includes(id);
@@ -42,268 +42,293 @@ function formatStatus(s) {
 // 📌 DAFTAR USER
 // ==========================
 bot.onText(/\/daftar (.+)/, async (msg, match) => {
-  const userId = msg.from.id;
-  const name = match[1].toLowerCase();
+  try {
+    const userId = msg.from.id;
+    const name = match[1].toLowerCase();
 
-  await supabase.from('users').upsert({
-    id: userId,
-    name
-  });
+    await supabase.from('users').upsert({
+      id: userId,
+      name
+    });
 
-  bot.sendMessage(msg.chat.id, `✅ Terdaftar sebagai ${name}`);
+    bot.sendMessage(msg.chat.id, `✅ Terdaftar sebagai ${name}`);
+  } catch (err) {
+    bot.sendMessage(msg.chat.id, "❌ Error daftar");
+    console.log(err);
+  }
 });
 
 // ==========================
 // 📋 ABSEN BUTTON
 // ==========================
 bot.onText(/\/absen$/, async (msg) => {
-  const userId = msg.from.id;
-
-  const { data: user } = await supabase
-    .from('users')
-    .select('*')
-    .eq('id', userId)
-    .single();
-
-  if (!user) {
-    bot.sendMessage(msg.chat.id, "❌ Daftar dulu!\n/daftar namamu");
-    return;
-  }
-
-  bot.sendMessage(msg.chat.id, "Pilih status:", {
-    reply_markup: {
-      inline_keyboard: [
-        [
-          { text: "Hadir ✅", callback_data: "h" },
-          { text: "Izin 🟡", callback_data: "i" }
-        ],
-        [
-          { text: "Sakit 🤒", callback_data: "s" },
-          { text: "Libur 💤", callback_data: "l" }
-        ]
-      ]
-    }
-  });
-});
-
-// ==========================
-// 🎯 HANDLE BUTTON ABSEN
-// ==========================
-bot.on('callback_query', async (q) => {
-  const userId = q.from.id;
-  const chatId = q.message.chat.id;
-  const status = q.data;
-  const date = getToday();
-
-  await supabase.from('absen').upsert({
-    chat_id: chatId,
-    user_id: userId,
-    date,
-    status
-  });
-
-  bot.sendMessage(chatId, `📋 Status: ${formatStatus(status)}`);
-});
-
-// ==========================
-// 📋 ABSEN MANUAL (FALLBACK)
-// ==========================
-bot.onText(/\/absen (.+)/, async (msg, match) => {
-  const chatId = msg.chat.id;
-  const date = getToday();
-
-  const list = match[1].split(',');
-
-  for (let item of list) {
-    let [name, status = 'h'] = item.includes(':')
-      ? item.split(':')
-      : item.split(' ');
-
-    name = name.toLowerCase();
-    status = status.toLowerCase()[0];
+  try {
+    const userId = msg.from.id;
 
     const { data: user } = await supabase
       .from('users')
       .select('*')
-      .eq('name', name)
+      .eq('id', userId)
       .single();
 
-    if (!user) continue;
+    if (!user) {
+      bot.sendMessage(msg.chat.id, "❌ Daftar dulu!\n/daftar namamu");
+      return;
+    }
+
+    bot.sendMessage(msg.chat.id, "Pilih status:", {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "Hadir ✅", callback_data: "h" },
+            { text: "Izin 🟡", callback_data: "i" }
+          ],
+          [
+            { text: "Sakit 🤒", callback_data: "s" },
+            { text: "Libur 💤", callback_data: "l" }
+          ]
+        ]
+      }
+    });
+  } catch (err) {
+    console.log(err);
+  }
+});
+
+// ==========================
+// 🎯 HANDLE BUTTON
+// ==========================
+bot.on('callback_query', async (q) => {
+  try {
+    const userId = q.from.id;
+    const chatId = q.message.chat.id;
+    const status = q.data;
+    const date = getToday();
 
     await supabase.from('absen').upsert({
       chat_id: chatId,
-      user_id: user.id,
+      user_id: userId,
       date,
       status
     });
-  }
 
-  bot.sendMessage(chatId, "✅ Absen manual masuk");
+    bot.sendMessage(chatId, `📋 Status: ${formatStatus(status)}`);
+  } catch (err) {
+    console.log(err);
+  }
 });
 
 // ==========================
-// 📸 QC (BEFORE / AFTER)
+// 📋 ABSEN MANUAL
+// ==========================
+bot.onText(/\/absen (.+)/, async (msg, match) => {
+  try {
+    const chatId = msg.chat.id;
+    const date = getToday();
+
+    const list = match[1].split(',');
+
+    for (let item of list) {
+      let [name, status = 'h'] = item.includes(':')
+        ? item.split(':')
+        : item.split(' ');
+
+      name = name.toLowerCase();
+      status = status.toLowerCase()[0];
+
+      const { data: user } = await supabase
+        .from('users')
+        .select('*')
+        .eq('name', name)
+        .single();
+
+      if (!user) continue;
+
+      await supabase.from('absen').upsert({
+        chat_id: chatId,
+        user_id: user.id,
+        date,
+        status
+      });
+    }
+
+    bot.sendMessage(chatId, "✅ Absen manual masuk");
+  } catch (err) {
+    console.log(err);
+  }
+});
+
+// ==========================
+// 📸 QC
 // ==========================
 bot.on('photo', async (msg) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  const caption = msg.caption || '';
-  const date = getToday();
+  try {
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    const caption = msg.caption || '';
+    const date = getToday();
 
-  if (!caption.includes('-')) {
-    bot.sendMessage(chatId, "❌ Format: Nama - Before/After - Service");
-    return;
+    if (!caption.includes('-')) {
+      bot.sendMessage(chatId, "❌ Format: Nama - Before/After - Service");
+      return;
+    }
+
+    const type = caption.toLowerCase().includes('before')
+      ? 'before'
+      : 'after';
+
+    const { data: absen } = await supabase
+      .from('absen')
+      .select('*')
+      .eq('chat_id', chatId)
+      .eq('user_id', userId)
+      .eq('date', date)
+      .single();
+
+    if (!absen || absen.status !== 'h') {
+      bot.sendMessage(chatId, "⚠️ Kamu tidak hadir hari ini");
+      return;
+    }
+
+    const { data: existing } = await supabase
+      .from('qc_logs')
+      .select('*')
+      .eq('chat_id', chatId)
+      .eq('user_id', userId)
+      .eq('date', date)
+      .eq('type', type);
+
+    if (existing && existing.length > 0) {
+      bot.sendMessage(chatId, `⚠️ Sudah kirim ${type}`);
+      return;
+    }
+
+    await supabase.from('qc_logs').insert({
+      chat_id: chatId,
+      user_id: userId,
+      date,
+      type
+    });
+
+    bot.sendMessage(chatId, `✅ QC ${type}`);
+  } catch (err) {
+    console.log(err);
   }
-
-  const type = caption.toLowerCase().includes('before')
-    ? 'before'
-    : 'after';
-
-  // cek status hadir
-  const { data: absen } = await supabase
-    .from('absen')
-    .select('*')
-    .eq('chat_id', chatId)
-    .eq('user_id', userId)
-    .eq('date', date)
-    .single();
-
-  if (!absen || absen.status !== 'h') {
-    bot.sendMessage(chatId, "⚠️ Kamu tidak hadir hari ini");
-    return;
-  }
-
-  // prevent double
-  const { data: existing } = await supabase
-    .from('qc_logs')
-    .select('*')
-    .eq('chat_id', chatId)
-    .eq('user_id', userId)
-    .eq('date', date)
-    .eq('type', type);
-
-  if (existing.length > 0) {
-    bot.sendMessage(chatId, `⚠️ Sudah kirim ${type}`);
-    return;
-  }
-
-  await supabase.from('qc_logs').insert({
-    chat_id: chatId,
-    user_id: userId,
-    date,
-    type
-  });
-
-  bot.sendMessage(chatId, `✅ QC ${type}`);
 });
 
 // ==========================
-// 📊 DASHBOARD
+// 📊 DASHBOARD (WITH NAME)
 // ==========================
 bot.onText(/\/dashboard/, async (msg) => {
-  const chatId = msg.chat.id;
-  const date = getToday();
+  try {
+    const chatId = msg.chat.id;
+    const date = getToday();
 
-  const { data: absen } = await supabase
-    .from('absen')
-    .select('*')
-    .eq('chat_id', chatId)
-    .eq('date', date);
+    const { data: absen } = await supabase
+      .from('absen')
+      .select('*, users(name)')
+      .eq('chat_id', chatId)
+      .eq('date', date);
 
-  const { data: qc } = await supabase
-    .from('qc_logs')
-    .select('*')
-    .eq('chat_id', chatId)
-    .eq('date', date);
+    const { data: qc } = await supabase
+      .from('qc_logs')
+      .select('*')
+      .eq('chat_id', chatId)
+      .eq('date', date);
 
-  const map = {};
+    const map = {};
 
-  absen.forEach(a => {
-    map[a.user_id] = {
-      status: a.status,
-      before: false,
-      after: false,
-      total: 0
-    };
-  });
+    (absen || []).forEach(a => {
+      map[a.user_id] = {
+        name: a.users?.name || a.user_id,
+        status: a.status,
+        before: false,
+        after: false,
+        total: 0
+      };
+    });
 
-  qc.forEach(q => {
-    if (!map[q.user_id]) return;
-    map[q.user_id][q.type] = true;
-    map[q.user_id].total++;
-  });
+    (qc || []).forEach(q => {
+      if (!map[q.user_id]) return;
+      map[q.user_id][q.type] = true;
+      map[q.user_id].total++;
+    });
 
-  let text = `📊 DASHBOARD (${date})\n\n`;
+    let text = `📊 DASHBOARD (${date})\n\n`;
 
-  for (let id in map) {
-    const u = map[id];
+    for (let id in map) {
+      const u = map[id];
 
-    text += `${id}\n`;
-    text += `Status: ${formatStatus(u.status)}\n`;
-    text += `Before: ${u.before ? '✅' : '❌'} | `;
-    text += `After: ${u.after ? '✅' : '❌'} | `;
-    text += `Total: ${u.total}\n\n`;
+      text += `${u.name}\n`;
+      text += `Status: ${formatStatus(u.status)}\n`;
+      text += `Before: ${u.before ? '✅' : '❌'} | `;
+      text += `After: ${u.after ? '✅' : '❌'} | `;
+      text += `Total: ${u.total}\n\n`;
+    }
+
+    bot.sendMessage(chatId, text);
+  } catch (err) {
+    console.log(err);
   }
-
-  bot.sendMessage(chatId, text);
 });
 
 // ==========================
-// 🚨 AUTO TAG
+// 🚨 AUTO CHECK
 // ==========================
 async function checkBelum(chatId) {
-  const date = getToday();
+  try {
+    const date = getToday();
 
-  const { data: absen } = await supabase
-    .from('absen')
-    .select('*')
-    .eq('chat_id', chatId)
-    .eq('date', date);
+    const { data: absen } = await supabase
+      .from('absen')
+      .select('*')
+      .eq('chat_id', chatId)
+      .eq('date', date);
 
-  const { data: qc } = await supabase
-    .from('qc_logs')
-    .select('*')
-    .eq('chat_id', chatId)
-    .eq('date', date);
+    const { data: qc } = await supabase
+      .from('qc_logs')
+      .select('*')
+      .eq('chat_id', chatId)
+      .eq('date', date);
 
-  const map = {};
+    const map = {};
 
-  absen.forEach(a => {
-    if (a.status === 'h') {
-      map[a.user_id] = { before: false, after: false };
+    (absen || []).forEach(a => {
+      if (a.status === 'h') {
+        map[a.user_id] = { before: false, after: false };
+      }
+    });
+
+    (qc || []).forEach(q => {
+      if (!map[q.user_id]) return;
+      map[q.user_id][q.type] = true;
+    });
+
+    const belum = Object.entries(map)
+      .filter(([_, u]) => !u.before || !u.after)
+      .map(([id]) => id);
+
+    if (belum.length) {
+      bot.sendMessage(chatId, `🚨 Belum lengkap:\n${belum.join(', ')}`);
     }
-  });
-
-  qc.forEach(q => {
-    if (!map[q.user_id]) return;
-    map[q.user_id][q.type] = true;
-  });
-
-  const belum = Object.entries(map)
-    .filter(([_, u]) => !u.before || !u.after)
-    .map(([id]) => id);
-
-  if (belum.length) {
-    bot.sendMessage(chatId, `🚨 Belum lengkap:\n${belum.join(', ')}`);
+  } catch (err) {
+    console.log(err);
   }
 }
 
 // ==========================
 // ⏰ CRON
 // ==========================
-cron.schedule('0 10 * * *', async () => {
-  bot.sendMessage(
-    process.env.GROUP_ID,
-    "📋 Absen sekarang!\n/absen"
-  );
+cron.schedule('0 10 * * *', () => {
+  bot.sendMessage(process.env.GROUP_ID, "📋 Absen sekarang!\n/absen");
 });
 
-cron.schedule('0 13 * * *', async () => {
+cron.schedule('0 13 * * *', () => {
   checkBelum(process.env.GROUP_ID);
 });
 
 // ==========================
-// 👑 ADMIN COMMAND
+// 👑 ADMIN
 // ==========================
 bot.onText(/\/reset/, async (msg) => {
   if (!isAdmin(msg.from.id)) return;
@@ -317,4 +342,5 @@ bot.onText(/\/reset/, async (msg) => {
   bot.sendMessage(chatId, "🧹 Data hari ini direset");
 });
 
-console.log('🔥 BOT CLOUD READY');
+// ==========================
+console.log('🔥 BOT FINAL READY');
