@@ -1,3 +1,9 @@
+console.log("🚀 BOT STARTING...");
+bot.on("polling_error", console.log);
+
+process.on("uncaughtException", console.error);
+process.on("unhandledRejection", console.error);
+
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const cron = require('node-cron');
