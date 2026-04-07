@@ -360,5 +360,16 @@ bot.onText(/\/reset/, async (msg) => {
   bot.sendMessage(chatId, "🧹 Data hari ini direset");
 });
 
+//Http require
+const http = require('http');
+
+const PORT = process.env.PORT || 3000;
+
+http.createServer((req, res) => {
+  res.writeHead(200);
+  res.end("QC BOT RUNNING 🔥");
+}).listen(PORT, () => {
+  console.log("🌐 Server jalan di port", PORT);
+});
 // ==========================
 console.log('🔥 BOT FINAL READY');
