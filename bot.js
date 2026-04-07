@@ -1,42 +1,30 @@
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const cron = require('node-cron');
-const fs = require('fs');
+const { createClient } = require('@supabase/supabase-js');
 
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
 // ==========================
-// 💾 FILE STORAGE
+// 🔌 SUPABASE
 // ==========================
-const DATA_FILE = './qc-data.json';
-const USER_FILE = './user-map.json';
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_KEY
+);
 
-function load(file) {
-  try {
-    return JSON.parse(fs.readFileSync(file));
-  } catch {
-    return {};
-  }
+// ==========================
+// 👑 ADMIN
+// ==========================
+const ADMINS = [5109637592]; // ganti dengan userId lo
+
+function isAdmin(id) {
+  return ADMINS.includes(id);
 }
-
-function save(file, data) {
-  fs.writeFileSync(file, JSON.stringify(data, null, 2));
-}
-
-let qcData = load(DATA_FILE);
-let userMap = load(USER_FILE);
 
 // ==========================
 // 🧠 UTILS
 // ==========================
-function normalizeName(name) {
-  return name.trim().toLowerCase();
-}
-
-function capitalize(name) {
-  return name.charAt(0).toUpperCase() + name.slice(1);
-}
-
 function getToday() {
   return new Date().toISOString().split('T')[0];
 }
@@ -53,26 +41,32 @@ function formatStatus(s) {
 // ==========================
 // 📌 DAFTAR USER
 // ==========================
-bot.onText(/\/daftar (.+)/, (msg, match) => {
+bot.onText(/\/daftar (.+)/, async (msg, match) => {
   const userId = msg.from.id;
-  const name = normalizeName(match[1]);
+  const name = match[1].toLowerCase();
 
-  userMap[userId] = name;
-  save(USER_FILE, userMap);
+  await supabase.from('users').upsert({
+    id: userId,
+    name
+  });
 
-  bot.sendMessage(msg.chat.id, `✅ Terdaftar sebagai ${capitalize(name)}`);
+  bot.sendMessage(msg.chat.id, `✅ Terdaftar sebagai ${name}`);
 });
 
 // ==========================
-// 📋 ABSEN AUTO BUTTON
+// 📋 ABSEN BUTTON
 // ==========================
-bot.onText(/\/absen$/, (msg) => {
+bot.onText(/\/absen$/, async (msg) => {
   const userId = msg.from.id;
 
-  if (!userMap[userId]) {
-    bot.sendMessage(msg.chat.id,
-      "❌ Kamu belum daftar!\n/daftar namamu"
-    );
+  const { data: user } = await supabase
+    .from('users')
+    .select('*')
+    .eq('id', userId)
+    .single();
+
+  if (!user) {
+    bot.sendMessage(msg.chat.id, "❌ Daftar dulu!\n/daftar namamu");
     return;
   }
 
@@ -93,148 +87,163 @@ bot.onText(/\/absen$/, (msg) => {
 });
 
 // ==========================
-// 🎯 HANDLE BUTTON
+// 🎯 HANDLE BUTTON ABSEN
 // ==========================
-bot.on('callback_query', (query) => {
-  const userId = query.from.id;
-  const chatId = query.message.chat.id;
-  const status = query.data;
+bot.on('callback_query', async (q) => {
+  const userId = q.from.id;
+  const chatId = q.message.chat.id;
+  const status = q.data;
   const date = getToday();
 
-  const name = userMap[userId];
+  await supabase.from('absen').upsert({
+    chat_id: chatId,
+    user_id: userId,
+    date,
+    status
+  });
 
-  if (!qcData[chatId]) qcData[chatId] = {};
-  if (!qcData[chatId][date]) {
-    qcData[chatId][date] = { users: {} };
-  }
-
-  const data = qcData[chatId][date];
-
-  if (!data.users[name]) {
-    data.users[name] = {
-      status,
-      before: false,
-      after: false,
-      total: 0
-    };
-  } else {
-    data.users[name].status = status;
-  }
-
-  save(DATA_FILE, qcData);
-
-  bot.sendMessage(chatId,
-    `📋 ${capitalize(name)} → ${formatStatus(status)}`
-  );
+  bot.sendMessage(chatId, `📋 Status: ${formatStatus(status)}`);
 });
 
 // ==========================
 // 📋 ABSEN MANUAL (FALLBACK)
 // ==========================
-bot.onText(/\/absen (.+)/, (msg, match) => {
+bot.onText(/\/absen (.+)/, async (msg, match) => {
   const chatId = msg.chat.id;
   const date = getToday();
 
-  const input = match[1].split(',').map(x => x.trim());
+  const list = match[1].split(',');
 
-  if (!qcData[chatId]) qcData[chatId] = {};
-  if (!qcData[chatId][date]) {
-    qcData[chatId][date] = { users: {} };
-  }
-
-  const data = qcData[chatId][date];
-
-  input.forEach(item => {
+  for (let item of list) {
     let [name, status = 'h'] = item.includes(':')
       ? item.split(':')
       : item.split(' ');
 
-    name = normalizeName(name);
+    name = name.toLowerCase();
     status = status.toLowerCase()[0];
 
-    if (!data.users[name]) {
-      data.users[name] = {
-        status,
-        before: false,
-        after: false,
-        total: 0
-      };
-    } else {
-      data.users[name].status = status;
-    }
-  });
+    const { data: user } = await supabase
+      .from('users')
+      .select('*')
+      .eq('name', name)
+      .single();
 
-  save(DATA_FILE, qcData);
+    if (!user) continue;
 
-  const list = Object.entries(data.users)
-    .map(([n, u]) => `${capitalize(n)} (${formatStatus(u.status)})`);
+    await supabase.from('absen').upsert({
+      chat_id: chatId,
+      user_id: user.id,
+      date,
+      status
+    });
+  }
 
-  bot.sendMessage(chatId, `📋 Absen:\n${list.join(', ')}`);
+  bot.sendMessage(chatId, "✅ Absen manual masuk");
 });
 
 // ==========================
-// 📸 QC
+// 📸 QC (BEFORE / AFTER)
 // ==========================
-bot.on('photo', (msg) => {
+bot.on('photo', async (msg) => {
   const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  const caption = msg.caption || '';
   const date = getToday();
-  const caption = msg.caption;
 
-  if (!caption) {
-    bot.sendMessage(chatId, "❌ Pakai caption!");
+  if (!caption.includes('-')) {
+    bot.sendMessage(chatId, "❌ Format: Nama - Before/After - Service");
     return;
   }
 
-  const parts = caption.split('-').map(x => x.trim());
+  const type = caption.toLowerCase().includes('before')
+    ? 'before'
+    : 'after';
 
-  const name = normalizeName(parts[0]);
-  const type = parts[1]?.toLowerCase();
+  // cek status hadir
+  const { data: absen } = await supabase
+    .from('absen')
+    .select('*')
+    .eq('chat_id', chatId)
+    .eq('user_id', userId)
+    .eq('date', date)
+    .single();
 
-  const data = qcData[chatId]?.[date];
-
-  if (!data || !data.users[name]) {
-    bot.sendMessage(chatId, "⚠️ Belum absen");
+  if (!absen || absen.status !== 'h') {
+    bot.sendMessage(chatId, "⚠️ Kamu tidak hadir hari ini");
     return;
   }
 
-  const user = data.users[name];
+  // prevent double
+  const { data: existing } = await supabase
+    .from('qc_logs')
+    .select('*')
+    .eq('chat_id', chatId)
+    .eq('user_id', userId)
+    .eq('date', date)
+    .eq('type', type);
 
-  if (user.status !== 'h') {
-    bot.sendMessage(chatId, "⚠️ Status bukan hadir");
+  if (existing.length > 0) {
+    bot.sendMessage(chatId, `⚠️ Sudah kirim ${type}`);
     return;
   }
 
-  if (type.includes('before') && user.before) return;
-  if (type.includes('after') && user.after) return;
+  await supabase.from('qc_logs').insert({
+    chat_id: chatId,
+    user_id: userId,
+    date,
+    type
+  });
 
-  if (type.includes('before')) user.before = true;
-  if (type.includes('after')) user.after = true;
-
-  user.total++;
-
-  save(DATA_FILE, qcData);
-
-  bot.sendMessage(chatId, `✅ ${capitalize(name)} (${type})`);
+  bot.sendMessage(chatId, `✅ QC ${type}`);
 });
 
 // ==========================
 // 📊 DASHBOARD
 // ==========================
-bot.onText(/\/dashboard/, (msg) => {
+bot.onText(/\/dashboard/, async (msg) => {
   const chatId = msg.chat.id;
   const date = getToday();
 
-  const data = qcData[chatId]?.[date];
-  if (!data) return bot.sendMessage(chatId, "Belum ada data");
+  const { data: absen } = await supabase
+    .from('absen')
+    .select('*')
+    .eq('chat_id', chatId)
+    .eq('date', date);
+
+  const { data: qc } = await supabase
+    .from('qc_logs')
+    .select('*')
+    .eq('chat_id', chatId)
+    .eq('date', date);
+
+  const map = {};
+
+  absen.forEach(a => {
+    map[a.user_id] = {
+      status: a.status,
+      before: false,
+      after: false,
+      total: 0
+    };
+  });
+
+  qc.forEach(q => {
+    if (!map[q.user_id]) return;
+    map[q.user_id][q.type] = true;
+    map[q.user_id].total++;
+  });
 
   let text = `📊 DASHBOARD (${date})\n\n`;
 
-  Object.entries(data.users).forEach(([name, u]) => {
-    text += `${capitalize(name)} (${formatStatus(u.status)})\n`;
+  for (let id in map) {
+    const u = map[id];
+
+    text += `${id}\n`;
+    text += `Status: ${formatStatus(u.status)}\n`;
     text += `Before: ${u.before ? '✅' : '❌'} | `;
     text += `After: ${u.after ? '✅' : '❌'} | `;
     text += `Total: ${u.total}\n\n`;
-  });
+  }
 
   bot.sendMessage(chatId, text);
 });
@@ -242,35 +251,70 @@ bot.onText(/\/dashboard/, (msg) => {
 // ==========================
 // 🚨 AUTO TAG
 // ==========================
-function check(chatId) {
+async function checkBelum(chatId) {
   const date = getToday();
-  const data = qcData[chatId]?.[date];
-  if (!data) return;
 
-  const belum = Object.entries(data.users)
-    .filter(([_, u]) => u.status === 'h' && (!u.before || !u.after))
-    .map(([n]) => capitalize(n));
+  const { data: absen } = await supabase
+    .from('absen')
+    .select('*')
+    .eq('chat_id', chatId)
+    .eq('date', date);
+
+  const { data: qc } = await supabase
+    .from('qc_logs')
+    .select('*')
+    .eq('chat_id', chatId)
+    .eq('date', date);
+
+  const map = {};
+
+  absen.forEach(a => {
+    if (a.status === 'h') {
+      map[a.user_id] = { before: false, after: false };
+    }
+  });
+
+  qc.forEach(q => {
+    if (!map[q.user_id]) return;
+    map[q.user_id][q.type] = true;
+  });
+
+  const belum = Object.entries(map)
+    .filter(([_, u]) => !u.before || !u.after)
+    .map(([id]) => id);
 
   if (belum.length) {
-    bot.sendMessage(chatId,
-      `🚨 Belum lengkap:\n${belum.join(', ')}`
-    );
+    bot.sendMessage(chatId, `🚨 Belum lengkap:\n${belum.join(', ')}`);
   }
 }
 
 // ==========================
 // ⏰ CRON
 // ==========================
-cron.schedule('0 10 * * *', () => {
-  Object.keys(qcData).forEach(chatId => {
-    bot.sendMessage(chatId,
-      "📋 Absen sekarang!\n/absen"
-    );
-  });
+cron.schedule('0 10 * * *', async () => {
+  bot.sendMessage(
+    process.env.GROUP_ID,
+    "📋 Absen sekarang!\n/absen"
+  );
 });
 
-cron.schedule('0 13 * * *', () => {
-  Object.keys(qcData).forEach(check);
+cron.schedule('0 13 * * *', async () => {
+  checkBelum(process.env.GROUP_ID);
 });
 
-console.log('🔥 BOT GOD MODE AKTIF');
+// ==========================
+// 👑 ADMIN COMMAND
+// ==========================
+bot.onText(/\/reset/, async (msg) => {
+  if (!isAdmin(msg.from.id)) return;
+
+  const chatId = msg.chat.id;
+  const date = getToday();
+
+  await supabase.from('absen').delete().eq('chat_id', chatId).eq('date', date);
+  await supabase.from('qc_logs').delete().eq('chat_id', chatId).eq('date', date);
+
+  bot.sendMessage(chatId, "🧹 Data hari ini direset");
+});
+
+console.log('🔥 BOT CLOUD READY');
