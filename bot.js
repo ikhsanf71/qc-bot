@@ -1,15 +1,21 @@
-console.log("🚀 BOT STARTING...");
-bot.on("polling_error", console.log);
-
-process.on("uncaughtException", console.error);
-process.on("unhandledRejection", console.error);
-
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const cron = require('node-cron');
 const { createClient } = require('@supabase/supabase-js');
 
+console.log("🚀 BOT STARTING...");
+
+// ==========================
+// 🔌 INIT BOT (WAJIB DI ATAS)
+// ==========================
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
+
+// ==========================
+// 🔥 ERROR HANDLER (WAJIB)
+// ==========================
+bot.on("polling_error", console.log);
+process.on("uncaughtException", console.error);
+process.on("unhandledRejection", console.error);
 
 // ==========================
 // 🔌 SUPABASE
@@ -59,8 +65,8 @@ bot.onText(/\/daftar (.+)/, async (msg, match) => {
 
     bot.sendMessage(msg.chat.id, `✅ Terdaftar sebagai ${name}`);
   } catch (err) {
-    bot.sendMessage(msg.chat.id, "❌ Error daftar");
     console.log(err);
+    bot.sendMessage(msg.chat.id, "❌ Error daftar");
   }
 });
 
@@ -131,7 +137,6 @@ bot.onText(/\/absen (.+)/, async (msg, match) => {
   try {
     const chatId = msg.chat.id;
     const date = getToday();
-
     const list = match[1].split(',');
 
     for (let item of list) {
@@ -223,7 +228,7 @@ bot.on('photo', async (msg) => {
 });
 
 // ==========================
-// 📊 DASHBOARD (WITH NAME)
+// 📊 DASHBOARD
 // ==========================
 bot.onText(/\/dashboard/, async (msg) => {
   try {
