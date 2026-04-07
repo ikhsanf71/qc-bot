@@ -1,17 +1,13 @@
 {
   "name": "qc-bot",
   "version": "1.0.0",
+  "description": "Telegram QC Bot",
   "main": "bot.js",
-  "dependencies": {
-    "dotenv": "^16.6.1",
-    "node-telegram-bot-api": "^0.61.0"
-  },
-  "description": "",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node bot.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs"
+  "dependencies": {
+    "dotenv": "^16.0.0",
+    "node-telegram-bot-api": "^0.61.0"
+  }
 }
