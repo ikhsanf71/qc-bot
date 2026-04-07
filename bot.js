@@ -9,20 +9,22 @@ const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 // 💾 FILE STORAGE
 // ==========================
 const DATA_FILE = './qc-data.json';
+const USER_FILE = './user-map.json';
 
-function loadData() {
+function load(file) {
   try {
-    return JSON.parse(fs.readFileSync(DATA_FILE));
+    return JSON.parse(fs.readFileSync(file));
   } catch {
     return {};
   }
 }
 
-function saveData(data) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+function save(file, data) {
+  fs.writeFileSync(file, JSON.stringify(data, null, 2));
 }
 
-let qcData = loadData();
+let qcData = load(DATA_FILE);
+let userMap = load(USER_FILE);
 
 // ==========================
 // 🧠 UTILS
@@ -31,164 +33,244 @@ function normalizeName(name) {
   return name.trim().toLowerCase();
 }
 
-// ==========================
-// 🧠 PARSE CAPTION
-// ==========================
-function parseCaption(caption) {
-  if (!caption) return { error: "❌ Wajib pakai caption!\nFormat:\nNama - Before/After - Service" };
+function capitalize(name) {
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
 
-  const parts = caption.split('-').map(p => p.trim());
+function getToday() {
+  return new Date().toISOString().split('T')[0];
+}
 
-  if (parts.length < 3) {
-    return { error: "❌ Format kurang lengkap!\nGunakan:\nNama - Before/After - Service" };
-  }
-
-  const name = normalizeName(parts[0]);
-  const type = parts[1].toLowerCase();
-  const service = parts.slice(2).join(' - ');
-
-  if (!name) return { error: "❌ Nama tidak boleh kosong!" };
-
-  if (!type.includes('before') && !type.includes('after')) {
-    return { error: "❌ Harus ada 'Before' atau 'After'" };
-  }
-
-  if (!service) return { error: "❌ Service tidak boleh kosong!" };
-
-  return { name, type, service };
+function formatStatus(s) {
+  return {
+    h: 'Hadir',
+    i: 'Izin',
+    s: 'Sakit',
+    l: 'Libur'
+  }[s] || s;
 }
 
 // ==========================
-// 📋 ABSEN
+// 📌 DAFTAR USER
 // ==========================
-bot.onText(/\/absen (.+)/, (msg, match) => {
-  const chatId = msg.chat.id;
-  const names = match[1].split(',').map(n => normalizeName(n));
+bot.onText(/\/daftar (.+)/, (msg, match) => {
+  const userId = msg.from.id;
+  const name = normalizeName(match[1]);
 
-  qcData[chatId] = {
-    absen: names,
-    users: {}
-  };
+  userMap[userId] = name;
+  save(USER_FILE, userMap);
 
-  names.forEach(name => {
-    qcData[chatId].users[name] = {
+  bot.sendMessage(msg.chat.id, `✅ Terdaftar sebagai ${capitalize(name)}`);
+});
+
+// ==========================
+// 📋 ABSEN AUTO BUTTON
+// ==========================
+bot.onText(/\/absen$/, (msg) => {
+  const userId = msg.from.id;
+
+  if (!userMap[userId]) {
+    bot.sendMessage(msg.chat.id,
+      "❌ Kamu belum daftar!\n/daftar namamu"
+    );
+    return;
+  }
+
+  bot.sendMessage(msg.chat.id, "Pilih status:", {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: "Hadir ✅", callback_data: "h" },
+          { text: "Izin 🟡", callback_data: "i" }
+        ],
+        [
+          { text: "Sakit 🤒", callback_data: "s" },
+          { text: "Libur 💤", callback_data: "l" }
+        ]
+      ]
+    }
+  });
+});
+
+// ==========================
+// 🎯 HANDLE BUTTON
+// ==========================
+bot.on('callback_query', (query) => {
+  const userId = query.from.id;
+  const chatId = query.message.chat.id;
+  const status = query.data;
+  const date = getToday();
+
+  const name = userMap[userId];
+
+  if (!qcData[chatId]) qcData[chatId] = {};
+  if (!qcData[chatId][date]) {
+    qcData[chatId][date] = { users: {} };
+  }
+
+  const data = qcData[chatId][date];
+
+  if (!data.users[name]) {
+    data.users[name] = {
+      status,
       before: false,
       after: false,
       total: 0
     };
-  });
+  } else {
+    data.users[name].status = status;
+  }
 
-  saveData(qcData);
+  save(DATA_FILE, qcData);
 
-  bot.sendMessage(chatId, `📋 Absen:\n${names.join(', ')}`);
+  bot.sendMessage(chatId,
+    `📋 ${capitalize(name)} → ${formatStatus(status)}`
+  );
 });
 
 // ==========================
-// 📸 HANDLE FOTO QC
+// 📋 ABSEN MANUAL (FALLBACK)
+// ==========================
+bot.onText(/\/absen (.+)/, (msg, match) => {
+  const chatId = msg.chat.id;
+  const date = getToday();
+
+  const input = match[1].split(',').map(x => x.trim());
+
+  if (!qcData[chatId]) qcData[chatId] = {};
+  if (!qcData[chatId][date]) {
+    qcData[chatId][date] = { users: {} };
+  }
+
+  const data = qcData[chatId][date];
+
+  input.forEach(item => {
+    let [name, status = 'h'] = item.includes(':')
+      ? item.split(':')
+      : item.split(' ');
+
+    name = normalizeName(name);
+    status = status.toLowerCase()[0];
+
+    if (!data.users[name]) {
+      data.users[name] = {
+        status,
+        before: false,
+        after: false,
+        total: 0
+      };
+    } else {
+      data.users[name].status = status;
+    }
+  });
+
+  save(DATA_FILE, qcData);
+
+  const list = Object.entries(data.users)
+    .map(([n, u]) => `${capitalize(n)} (${formatStatus(u.status)})`);
+
+  bot.sendMessage(chatId, `📋 Absen:\n${list.join(', ')}`);
+});
+
+// ==========================
+// 📸 QC
 // ==========================
 bot.on('photo', (msg) => {
   const chatId = msg.chat.id;
+  const date = getToday();
   const caption = msg.caption;
 
-  const result = parseCaption(caption);
-
-  if (result.error) {
-    bot.sendMessage(chatId, result.error);
+  if (!caption) {
+    bot.sendMessage(chatId, "❌ Pakai caption!");
     return;
   }
 
-  const data = qcData[chatId];
+  const parts = caption.split('-').map(x => x.trim());
 
-  if (!data || !data.users[result.name]) {
-    bot.sendMessage(chatId, `⚠️ ${result.name} belum absen`);
+  const name = normalizeName(parts[0]);
+  const type = parts[1]?.toLowerCase();
+
+  const data = qcData[chatId]?.[date];
+
+  if (!data || !data.users[name]) {
+    bot.sendMessage(chatId, "⚠️ Belum absen");
     return;
   }
 
-  const user = data.users[result.name];
+  const user = data.users[name];
 
-  // prevent double before
-  if (result.type.includes('before') && user.before) {
-    bot.sendMessage(chatId, `⚠️ ${result.name} sudah kirim BEFORE`);
+  if (user.status !== 'h') {
+    bot.sendMessage(chatId, "⚠️ Status bukan hadir");
     return;
   }
 
-  // prevent double after
-  if (result.type.includes('after') && user.after) {
-    bot.sendMessage(chatId, `⚠️ ${result.name} sudah kirim AFTER`);
-    return;
-  }
+  if (type.includes('before') && user.before) return;
+  if (type.includes('after') && user.after) return;
 
-  if (result.type.includes('before')) user.before = true;
-  if (result.type.includes('after')) user.after = true;
+  if (type.includes('before')) user.before = true;
+  if (type.includes('after')) user.after = true;
 
-  user.total += 1;
+  user.total++;
 
-  saveData(qcData);
+  save(DATA_FILE, qcData);
 
-  bot.sendMessage(chatId, `✅ ${result.name} (${result.type})`);
+  bot.sendMessage(chatId, `✅ ${capitalize(name)} (${type})`);
 });
 
 // ==========================
-// 🔍 DASHBOARD
+// 📊 DASHBOARD
 // ==========================
 bot.onText(/\/dashboard/, (msg) => {
   const chatId = msg.chat.id;
-  const data = qcData[chatId];
+  const date = getToday();
 
-  if (!data) {
-    bot.sendMessage(chatId, "⚠️ Belum ada data");
-    return;
-  }
+  const data = qcData[chatId]?.[date];
+  if (!data) return bot.sendMessage(chatId, "Belum ada data");
 
-  const sorted = Object.entries(data.users)
-    .sort((a, b) => b[1].total - a[1].total);
+  let text = `📊 DASHBOARD (${date})\n\n`;
 
-  let text = "📊 DASHBOARD QC\n\n";
-
-  sorted.forEach(([name, info]) => {
-    text += `${name}\n`;
-    text += `Before: ${info.before ? '✅' : '❌'} | `;
-    text += `After: ${info.after ? '✅' : '❌'} | `;
-    text += `Total: ${info.total}\n\n`;
+  Object.entries(data.users).forEach(([name, u]) => {
+    text += `${capitalize(name)} (${formatStatus(u.status)})\n`;
+    text += `Before: ${u.before ? '✅' : '❌'} | `;
+    text += `After: ${u.after ? '✅' : '❌'} | `;
+    text += `Total: ${u.total}\n\n`;
   });
 
   bot.sendMessage(chatId, text);
 });
 
 // ==========================
-// 🚨 AUTO TAG BELUM LENGKAP
+// 🚨 AUTO TAG
 // ==========================
-function checkBelumLengkap(chatId) {
-  const data = qcData[chatId];
+function check(chatId) {
+  const date = getToday();
+  const data = qcData[chatId]?.[date];
   if (!data) return;
 
   const belum = Object.entries(data.users)
-    .filter(([_, u]) => !u.before || !u.after)
-    .map(([name]) => name);
+    .filter(([_, u]) => u.status === 'h' && (!u.before || !u.after))
+    .map(([n]) => capitalize(n));
 
-  if (belum.length > 0) {
-    bot.sendMessage(chatId, `🚨 Belum lengkap:\n${belum.join(', ')}`);
+  if (belum.length) {
+    bot.sendMessage(chatId,
+      `🚨 Belum lengkap:\n${belum.join(', ')}`
+    );
   }
 }
 
 // ==========================
-// ⏰ REMINDER
+// ⏰ CRON
 // ==========================
 cron.schedule('0 10 * * *', () => {
   Object.keys(qcData).forEach(chatId => {
     bot.sendMessage(chatId,
-      `📋 ROLLCALL TIME!\n/absen Nama1, Nama2`
+      "📋 Absen sekarang!\n/absen"
     );
   });
 });
 
-// ==========================
-// ⏰ AUTO TAG
-// ==========================
 cron.schedule('0 13 * * *', () => {
-  Object.keys(qcData).forEach(chatId => {
-    checkBelumLengkap(chatId);
-  });
+  Object.keys(qcData).forEach(check);
 });
 
-console.log('🔥 QC BOT HARDENED READY');
+console.log('🔥 BOT GOD MODE AKTIF');
