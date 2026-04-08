@@ -38,11 +38,16 @@ async function handleFoto(bot, msg) {
   }
 
   // Validasi outlet terdaftar
-  const { data: outlet } = await supabase
+  const { data: outlet, error: outletError } = await supabase
     .from('outlets')
     .select('id, is_active')
     .eq('id', chatId)
-    .single();
+    .maybeSingle();
+
+  if (outletError) {
+    console.error('[FOTO] Error ambil outlet:', outletError.message);
+    return;
+  }
 
   if (!outlet || !outlet.is_active) return; // bukan grup outlet, abaikan
 
@@ -68,13 +73,18 @@ async function handleFoto(bot, msg) {
   }
 
   // Validasi user sudah absen & statusnya hadir
-  const { data: absen } = await supabase
+  const { data: absen, error: absenError } = await supabase
     .from('absen')
     .select('status')
     .eq('outlet_id', chatId)
     .eq('telegram_id', userId)
     .eq('date', today)
-    .single();
+    .maybeSingle();
+
+  if (absenError) {
+    console.error('[FOTO] Error cek absen:', absenError.message);
+    return bot.sendMessage(chatId, '⚠️ Terjadi error, coba lagi.');
+  }
 
   if (!absen) {
     return bot.sendMessage(chatId,
@@ -90,14 +100,18 @@ async function handleFoto(bot, msg) {
   }
 
   // Cek apakah sudah kirim foto tipe ini hari ini
-  const { data: existing } = await supabase
+  const { data: existing, error: existingError } = await supabase
     .from('qc_logs')
     .select('id')
     .eq('outlet_id', chatId)
     .eq('telegram_id', userId)
     .eq('date', today)
     .eq('type', type)
-    .single();
+    .maybeSingle();
+
+  if (existingError) {
+    console.error('[FOTO] Error cek existing:', existingError.message);
+  }
 
   if (existing) {
     return bot.sendMessage(chatId,
@@ -111,24 +125,33 @@ async function handleFoto(bot, msg) {
   const photos = msg.photo;
   const fileId = photos[photos.length - 1].file_id;
 
-  await dbQuery(() =>
-    supabase.from('qc_logs').insert({
+  const { error: insertError } = await supabase
+    .from('qc_logs')
+    .insert({
       outlet_id: chatId,
       telegram_id: userId,
       date: today,
       type,
       file_id: fileId,
-      caption: caption.slice(0, 500) // truncate agar aman
-    })
-  );
+      caption: caption.slice(0, 500)
+    });
+
+  if (insertError) {
+    console.error('[FOTO] Error insert:', insertError.message);
+    return bot.sendMessage(chatId, '⚠️ Gagal menyimpan foto. Coba lagi.');
+  }
 
   // Cek apakah sudah lengkap (before + after)
-  const { data: allQC } = await supabase
+  const { data: allQC, error: allQcError } = await supabase
     .from('qc_logs')
     .select('type')
     .eq('outlet_id', chatId)
     .eq('telegram_id', userId)
     .eq('date', today);
+
+  if (allQcError) {
+    console.error('[FOTO] Error cek kelengkapan:', allQcError.message);
+  }
 
   const hasBefore = allQC?.some(q => q.type === 'before');
   const hasAfter = allQC?.some(q => q.type === 'after');
@@ -146,14 +169,16 @@ async function handleFoto(bot, msg) {
   bot.sendMessage(chatId, response, { parse_mode: 'Markdown' });
 }
 
-
 function register(bot) {
   bot.on('photo', async (msg) => {
     try {
       await handleFoto(bot, msg);
     } catch (err) {
       console.error('[FOTO ERROR]', err.message);
-      // Tidak perlu balas error ke grup untuk menghindari spam
+      // PERBAIKAN: kirim pesan error ke grup agar user tahu ada masalah
+      if (msg?.chat?.id) {
+        bot.sendMessage(msg.chat.id, '⚠️ Gagal memproses foto. Coba lagi nanti.');
+      }
     }
   });
 }

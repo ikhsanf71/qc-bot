@@ -14,12 +14,11 @@ const TelegramBot = require('node-telegram-bot-api');
 
 // ==========================
 // 🚀 INIT BOT
-// Gunakan polling untuk development
-// Ganti ke webhook untuk production (lihat README)
+// Interval dinaikkan dari 300ms ke 1000ms untuk menghindari rate limit
 // ==========================
 const bot = new TelegramBot(process.env.BOT_TOKEN, {
   polling: {
-    interval: 300,
+    interval: 1000,      // ← 1 detik (sebelumnya 300ms)
     autoStart: true,
     params: { timeout: 10 }
   }
@@ -79,7 +78,6 @@ bot.onText(/\/start|\/help/, (msg) => {
 
 // ==========================
 // 🛡️ GLOBAL ERROR HANDLER
-// Mencegah bot crash karena uncaught error
 // ==========================
 bot.on('polling_error', (err) => {
   console.error('[POLLING ERROR]', err.code, err.message);
@@ -87,7 +85,6 @@ bot.on('polling_error', (err) => {
 
 process.on('uncaughtException', (err) => {
   console.error('[UNCAUGHT EXCEPTION]', err);
-  // Jangan exit — biarkan PM2 yang handle restart jika perlu
 });
 
 process.on('unhandledRejection', (reason) => {

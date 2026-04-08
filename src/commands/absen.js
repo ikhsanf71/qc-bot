@@ -17,22 +17,32 @@ async function handleAbsen(bot, msg) {
   }
 
   // Validasi outlet terdaftar
-  const { data: outlet } = await supabase
+  const { data: outlet, error: outletError } = await supabase
     .from('outlets')
     .select('id, is_active, is_operational')
     .eq('id', chatId)
-    .single();
+    .maybeSingle();
+
+  if (outletError) {
+    console.error('[ABSEN] Error ambil outlet:', outletError.message);
+    return bot.sendMessage(chatId, '⚠️ Terjadi error, coba lagi.');
+  }
 
   if (!outlet || !outlet.is_active) {
     return bot.sendMessage(chatId, '❌ Outlet ini belum terdaftar atau tidak aktif.');
   }
 
-  // Validasi user terdaftar & aktif di outlet ini
-  const { data: user } = await supabase
+  // Validasi user terdaftar
+  const { data: user, error: userError } = await supabase
     .from('users')
     .select('full_name')
     .eq('telegram_id', userId)
-    .single();
+    .maybeSingle();
+
+  if (userError) {
+    console.error('[ABSEN] Error ambil user:', userError.message);
+    return bot.sendMessage(chatId, '⚠️ Terjadi error, coba lagi.');
+  }
 
   if (!user) {
     return bot.sendMessage(chatId,
@@ -51,13 +61,17 @@ async function handleAbsen(bot, msg) {
 
   // Cek apakah sudah absen hari ini
   const today = getToday();
-  const { data: existingAbsen } = await supabase
+  const { data: existingAbsen, error: absenError } = await supabase
     .from('absen')
     .select('status')
     .eq('outlet_id', chatId)
     .eq('telegram_id', userId)
     .eq('date', today)
-    .single();
+    .maybeSingle();
+
+  if (absenError) {
+    console.error('[ABSEN] Error cek absen:', absenError.message);
+  }
 
   if (existingAbsen) {
     return bot.sendMessage(chatId,
@@ -87,7 +101,6 @@ async function handleAbsen(bot, msg) {
   );
 }
 
-
 /**
  * Callback handler untuk tombol absen
  * Format callback_data: "absen:<status>:<outletId>"
@@ -116,16 +129,21 @@ async function handleAbsenCallback(bot, q) {
     return bot.answerCallbackQuery(q.id, { text: '❌ Kamu bukan anggota aktif outlet ini.' });
   }
 
-  await dbQuery(() =>
-    supabase.from('absen').upsert({
+  // Upsert absen dengan error handling
+  const { error: upsertError } = await supabase
+    .from('absen')
+    .upsert({
       outlet_id: outletId,
       telegram_id: userId,
       date: today,
       status
-    }, { onConflict: 'outlet_id,telegram_id,date' })
-  );
+    }, { onConflict: 'outlet_id,telegram_id,date' });
 
-  // Selalu answer callback agar tombol tidak loading terus
+  if (upsertError) {
+    console.error('[ABSEN CALLBACK] Error upsert:', upsertError.message);
+    return bot.answerCallbackQuery(q.id, { text: '⚠️ Gagal menyimpan data.' });
+  }
+
   await bot.answerCallbackQuery(q.id, { text: `${formatStatus(status)} tercatat!` });
 
   // Edit pesan asli → hapus tombol
@@ -138,14 +156,15 @@ async function handleAbsenCallback(bot, q) {
         parse_mode: 'Markdown'
       }
     );
-  } catch { /* pesan sudah di-edit sebelumnya, skip */ }
+  } catch (err) {
+    // Log error tapi tidak throw (biar user tetap dapet feedback dari answerCallbackQuery)
+    console.error('[ABSEN CALLBACK] Error edit message:', err.message);
+  }
 }
-
 
 function register(bot) {
   bot.onText(/\/absen$/, (msg) => handleAbsen(bot, msg));
 
-  // Callback query — filter hanya yang prefix "absen:"
   bot.on('callback_query', async (q) => {
     if (!q.data?.startsWith('absen:')) return;
     try {

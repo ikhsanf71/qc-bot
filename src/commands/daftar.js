@@ -50,11 +50,16 @@ async function handleDaftar(bot, msg, match) {
   }
 
   // Validasi outlet sudah terdaftar
-  const { data: outlet } = await supabase
+  const { data: outlet, error: outletError } = await supabase
     .from('outlets')
     .select('id, name, is_active')
     .eq('id', chatId)
-    .single();
+    .maybeSingle();
+
+  if (outletError) {
+    console.error('[DAFTAR] Error ambil outlet:', outletError.message);
+    return bot.sendMessage(chatId, '⚠️ Terjadi error, coba lagi.');
+  }
 
   if (!outlet) {
     return bot.sendMessage(chatId,
@@ -68,34 +73,48 @@ async function handleDaftar(bot, msg, match) {
   }
 
   // Upsert identitas global user
-  await dbQuery(() =>
-    supabase.from('users').upsert({
+  const { error: upsertUserError } = await supabase
+    .from('users')
+    .upsert({
       telegram_id: userId,
       full_name: fullName,
       phone,
       username
-    }, { onConflict: 'telegram_id' })
-  );
+    }, { onConflict: 'telegram_id' });
+
+  if (upsertUserError) {
+    console.error('[DAFTAR] Error upsert user:', upsertUserError.message);
+    return bot.sendMessage(chatId, '⚠️ Gagal menyimpan data user.');
+  }
 
   // Cek keanggotaan aktif user saat ini
-  const { data: currentMembership } = await supabase
+  const { data: currentMembership, error: membershipError } = await supabase
     .from('outlet_members')
     .select('outlet_id, role, outlets(name)')
     .eq('telegram_id', userId)
     .eq('is_active', true)
-    .single();
+    .maybeSingle();
+
+  if (membershipError) {
+    console.error('[DAFTAR] Error cek membership:', membershipError.message);
+  }
 
   // Case A: belum punya outlet → langsung join
   if (!currentMembership) {
-    await dbQuery(() =>
-      supabase.from('outlet_members').upsert({
+    const { error: insertError } = await supabase
+      .from('outlet_members')
+      .upsert({
         telegram_id: userId,
         outlet_id: chatId,
         role: ROLES.STAFF,
         is_active: true,
         joined_at: new Date().toISOString()
-      }, { onConflict: 'telegram_id,outlet_id' })
-    );
+      }, { onConflict: 'telegram_id,outlet_id' });
+
+    if (insertError) {
+      console.error('[DAFTAR] Error insert membership:', insertError.message);
+      return bot.sendMessage(chatId, '⚠️ Gagal mendaftarkan ke outlet.');
+    }
 
     await auditLog({
       actor: userId,
@@ -125,13 +144,17 @@ async function handleDaftar(bot, msg, match) {
   }
 
   // Case C: sudah di outlet lain → buat transfer request
-  // Cek apakah sudah ada request pending
-  const { data: pendingTransfer } = await supabase
+  // Cek apakah sudah ada request pending (pakai maybeSingle biar tidak error kalau multiple rows)
+  const { data: pendingTransfer, error: pendingError } = await supabase
     .from('transfer_requests')
     .select('id, to_outlet_id')
     .eq('telegram_id', userId)
     .eq('status', 'pending')
-    .single();
+    .maybeSingle();
+
+  if (pendingError) {
+    console.error('[DAFTAR] Error cek pending transfer:', pendingError.message);
+  }
 
   if (pendingTransfer) {
     if (pendingTransfer.to_outlet_id === chatId) {
@@ -149,22 +172,31 @@ async function handleDaftar(bot, msg, match) {
   }
 
   // Buat transfer request baru
-  await dbQuery(() =>
-    supabase.from('transfer_requests').insert({
+  const { error: insertTransferError } = await supabase
+    .from('transfer_requests')
+    .insert({
       telegram_id: userId,
       from_outlet_id: currentMembership.outlet_id,
       to_outlet_id: chatId,
       status: 'pending'
-    })
-  );
+    });
+
+  if (insertTransferError) {
+    console.error('[DAFTAR] Error insert transfer request:', insertTransferError.message);
+    return bot.sendMessage(chatId, '⚠️ Gagal membuat request pindah outlet.');
+  }
 
   // Cari manager outlet tujuan untuk notif
-  const { data: managers } = await supabase
+  const { data: managers, error: managersError } = await supabase
     .from('outlet_members')
     .select('telegram_id')
     .eq('outlet_id', chatId)
     .eq('role', ROLES.MANAGER)
     .eq('is_active', true);
+
+  if (managersError) {
+    console.error('[DAFTAR] Error ambil managers:', managersError.message);
+  }
 
   const fromName = currentMembership.outlets?.name || 'outlet lain';
 
@@ -212,7 +244,6 @@ async function handleDaftar(bot, msg, match) {
   );
 }
 
-
 /**
  * /approve <telegram_id>
  * Manager/owner approve request pindah outlet
@@ -221,6 +252,10 @@ async function handleApprove(bot, msg, match) {
   const chatId = msg.chat.id;
   const actorId = msg.from.id;
   const targetId = parseInt(match[1]);
+
+  if (isNaN(targetId)) {
+    return bot.sendMessage(chatId, '❌ Format: /approve <telegram_id>');
+  }
 
   const { isOwner, isManagerOrOwner } = require('../middleware');
 
@@ -231,48 +266,54 @@ async function handleApprove(bot, msg, match) {
   }
 
   // Cari pending request
-  const { data: request } = await supabase
+  const { data: request, error: requestError } = await supabase
     .from('transfer_requests')
     .select('*, users(full_name, phone)')
     .eq('telegram_id', targetId)
     .eq('to_outlet_id', chatId)
     .eq('status', 'pending')
-    .single();
+    .maybeSingle();
+
+  if (requestError) {
+    console.error('[APPROVE] Error ambil request:', requestError.message);
+    return bot.sendMessage(chatId, '⚠️ Terjadi error, coba lagi.');
+  }
 
   if (!request) {
     return bot.sendMessage(chatId, '❌ Tidak ada request pending dari user ini.');
   }
 
   // Update request → approved
-  await dbQuery(() =>
-    supabase
-      .from('transfer_requests')
-      .update({ status: 'approved', reviewed_at: new Date().toISOString(), reviewed_by: actorId })
-      .eq('id', request.id)
-  );
+  const { error: updateError } = await supabase
+    .from('transfer_requests')
+    .update({ status: 'approved', reviewed_at: new Date().toISOString(), reviewed_by: actorId })
+    .eq('id', request.id);
+
+  if (updateError) {
+    console.error('[APPROVE] Error update request:', updateError.message);
+    return bot.sendMessage(chatId, '⚠️ Gagal approve request.');
+  }
 
   // Nonaktifkan keanggotaan outlet lama
   if (request.from_outlet_id) {
-    await dbQuery(() =>
-      supabase
-        .from('outlet_members')
-        .update({ is_active: false, left_at: new Date().toISOString() })
-        .eq('telegram_id', targetId)
-        .eq('outlet_id', request.from_outlet_id)
-    );
+    await supabase
+      .from('outlet_members')
+      .update({ is_active: false, left_at: new Date().toISOString() })
+      .eq('telegram_id', targetId)
+      .eq('outlet_id', request.from_outlet_id);
   }
 
   // Aktifkan/buat keanggotaan outlet baru
-  await dbQuery(() =>
-    supabase.from('outlet_members').upsert({
+  await supabase
+    .from('outlet_members')
+    .upsert({
       telegram_id: targetId,
       outlet_id: chatId,
       role: ROLES.STAFF,
       is_active: true,
       joined_at: new Date().toISOString(),
       left_at: null
-    }, { onConflict: 'telegram_id,outlet_id' })
-  );
+    }, { onConflict: 'telegram_id,outlet_id' });
 
   await auditLog({
     actor: actorId,
@@ -283,7 +324,11 @@ async function handleApprove(bot, msg, match) {
 
   // Notif ke user
   const userName = request.users?.full_name || `User ${targetId}`;
-  const { data: outlet } = await supabase.from('outlets').select('name').eq('id', chatId).single();
+  const { data: outlet } = await supabase
+    .from('outlets')
+    .select('name')
+    .eq('id', chatId)
+    .maybeSingle();
 
   try {
     await bot.sendMessage(targetId,
@@ -300,7 +345,6 @@ async function handleApprove(bot, msg, match) {
   );
 }
 
-
 /**
  * /rejecttransfer <telegram_id>
  * Manager/owner reject request pindah outlet
@@ -310,30 +354,42 @@ async function handleRejectTransfer(bot, msg, match) {
   const actorId = msg.from.id;
   const targetId = parseInt(match[1]);
 
+  if (isNaN(targetId)) {
+    return bot.sendMessage(chatId, '❌ Format: /rejecttransfer <telegram_id>');
+  }
+
   const { isOwner, isManagerOrOwner } = require('../middleware');
   const canReject = isOwner(actorId) || await isManagerOrOwner(actorId, chatId);
   if (!canReject) {
     return bot.sendMessage(chatId, '⛔ Hanya manager atau owner yang bisa reject.');
   }
 
-  const { data: request } = await supabase
+  const { data: request, error: requestError } = await supabase
     .from('transfer_requests')
     .select('*, users(full_name)')
     .eq('telegram_id', targetId)
     .eq('to_outlet_id', chatId)
     .eq('status', 'pending')
-    .single();
+    .maybeSingle();
+
+  if (requestError) {
+    console.error('[REJECT] Error ambil request:', requestError.message);
+    return bot.sendMessage(chatId, '⚠️ Terjadi error, coba lagi.');
+  }
 
   if (!request) {
     return bot.sendMessage(chatId, '❌ Tidak ada request pending dari user ini.');
   }
 
-  await dbQuery(() =>
-    supabase
-      .from('transfer_requests')
-      .update({ status: 'rejected', reviewed_at: new Date().toISOString(), reviewed_by: actorId })
-      .eq('id', request.id)
-  );
+  const { error: updateError } = await supabase
+    .from('transfer_requests')
+    .update({ status: 'rejected', reviewed_at: new Date().toISOString(), reviewed_by: actorId })
+    .eq('id', request.id);
+
+  if (updateError) {
+    console.error('[REJECT] Error update request:', updateError.message);
+    return bot.sendMessage(chatId, '⚠️ Gagal reject request.');
+  }
 
   await auditLog({
     actor: actorId,
@@ -353,7 +409,6 @@ async function handleRejectTransfer(bot, msg, match) {
 
   bot.sendMessage(chatId, `❌ Request dari *${escapeMarkdown(userName)}* ditolak.`, { parse_mode: 'Markdown' });
 }
-
 
 function register(bot) {
   bot.onText(/\/daftar (.+)/, (msg, match) => handleDaftar(bot, msg, match));

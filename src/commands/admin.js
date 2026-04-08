@@ -17,28 +17,41 @@ async function handleReset(bot, msg) {
   }
 
   // Validasi outlet
-  const { data: outlet } = await supabase
+  const { data: outlet, error: outletError } = await supabase
     .from('outlets')
     .select('id, name')
     .eq('id', chatId)
-    .single();
+    .maybeSingle();
+
+  if (outletError) {
+    console.error('[RESET] Error ambil outlet:', outletError.message);
+    return bot.sendMessage(chatId, '⚠️ Terjadi error, coba lagi.');
+  }
 
   if (!outlet) {
     return bot.sendMessage(chatId, '❌ Outlet ini belum terdaftar.');
   }
 
-  // Hitung dulu berapa data yang akan dihapus
-  const { count: absenCount } = await supabase
+  // Hitung berapa data yang akan dihapus
+  const { count: absenCount, error: absenCountError } = await supabase
     .from('absen')
     .select('*', { count: 'exact', head: true })
     .eq('outlet_id', chatId)
     .eq('date', today);
 
-  const { count: qcCount } = await supabase
+  if (absenCountError) {
+    console.error('[RESET] Error count absen:', absenCountError.message);
+  }
+
+  const { count: qcCount, error: qcCountError } = await supabase
     .from('qc_logs')
     .select('*', { count: 'exact', head: true })
     .eq('outlet_id', chatId)
     .eq('date', today);
+
+  if (qcCountError) {
+    console.error('[RESET] Error count qc:', qcCountError.message);
+  }
 
   // Konfirmasi dulu sebelum delete
   await bot.sendMessage(chatId,
@@ -60,11 +73,16 @@ async function handleResetConfirm(bot, msg) {
 
   if (!isOwner(userId)) return;
 
-  const { data: outlet } = await supabase
+  const { data: outlet, error: outletError } = await supabase
     .from('outlets')
     .select('id, name')
     .eq('id', chatId)
-    .single();
+    .maybeSingle();
+
+  if (outletError) {
+    console.error('[RESETCONFIRM] Error ambil outlet:', outletError.message);
+    return bot.sendMessage(chatId, '⚠️ Terjadi error.');
+  }
 
   if (!outlet) return;
 
@@ -74,13 +92,27 @@ async function handleResetConfirm(bot, msg) {
     .eq('outlet_id', chatId)
     .eq('date', today);
 
-  await dbQuery(() =>
-    supabase.from('absen').delete().eq('outlet_id', chatId).eq('date', today)
-  );
+  // Delete absen
+  const { error: deleteAbsenError } = await supabase
+    .from('absen')
+    .delete()
+    .eq('outlet_id', chatId)
+    .eq('date', today);
 
-  await dbQuery(() =>
-    supabase.from('qc_logs').delete().eq('outlet_id', chatId).eq('date', today)
-  );
+  if (deleteAbsenError) {
+    console.error('[RESETCONFIRM] Error delete absen:', deleteAbsenError.message);
+  }
+
+  // Delete qc_logs
+  const { error: deleteQcError } = await supabase
+    .from('qc_logs')
+    .delete()
+    .eq('outlet_id', chatId)
+    .eq('date', today);
+
+  if (deleteQcError) {
+    console.error('[RESETCONFIRM] Error delete qc:', deleteQcError.message);
+  }
 
   await auditLog({
     actor: userId,
@@ -94,7 +126,6 @@ async function handleResetConfirm(bot, msg) {
     { parse_mode: 'Markdown' }
   );
 }
-
 
 /**
  * /libur
@@ -110,11 +141,16 @@ async function handleLibur(bot, msg) {
     return bot.sendMessage(chatId, '⛔ Hanya manager atau owner yang bisa set libur.');
   }
 
-  const { data: outlet } = await supabase
+  const { data: outlet, error: outletError } = await supabase
     .from('outlets')
     .select('id, name, is_operational')
     .eq('id', chatId)
-    .single();
+    .maybeSingle();
+
+  if (outletError) {
+    console.error('[LIBUR] Error ambil outlet:', outletError.message);
+    return bot.sendMessage(chatId, '⚠️ Terjadi error.');
+  }
 
   if (!outlet) {
     return bot.sendMessage(chatId, '❌ Outlet ini belum terdaftar.');
@@ -124,9 +160,15 @@ async function handleLibur(bot, msg) {
     return bot.sendMessage(chatId, 'ℹ️ Outlet ini sudah dalam status libur hari ini.');
   }
 
-  await dbQuery(() =>
-    supabase.from('outlets').update({ is_operational: false }).eq('id', chatId)
-  );
+  const { error: updateError } = await supabase
+    .from('outlets')
+    .update({ is_operational: false })
+    .eq('id', chatId);
+
+  if (updateError) {
+    console.error('[LIBUR] Error update:', updateError.message);
+    return bot.sendMessage(chatId, '⚠️ Gagal mengubah status.');
+  }
 
   await auditLog({
     actor: userId,
@@ -143,7 +185,6 @@ async function handleLibur(bot, msg) {
   );
 }
 
-
 /**
  * /operational
  * Set outlet kembali operasional
@@ -157,11 +198,16 @@ async function handleOperational(bot, msg) {
     return bot.sendMessage(chatId, '⛔ Hanya manager atau owner yang bisa ubah status operasional.');
   }
 
-  const { data: outlet } = await supabase
+  const { data: outlet, error: outletError } = await supabase
     .from('outlets')
     .select('id, name, is_operational')
     .eq('id', chatId)
-    .single();
+    .maybeSingle();
+
+  if (outletError) {
+    console.error('[OPERATIONAL] Error ambil outlet:', outletError.message);
+    return bot.sendMessage(chatId, '⚠️ Terjadi error.');
+  }
 
   if (!outlet) return;
 
@@ -169,9 +215,15 @@ async function handleOperational(bot, msg) {
     return bot.sendMessage(chatId, 'ℹ️ Outlet ini sudah dalam status operasional.');
   }
 
-  await dbQuery(() =>
-    supabase.from('outlets').update({ is_operational: true }).eq('id', chatId)
-  );
+  const { error: updateError } = await supabase
+    .from('outlets')
+    .update({ is_operational: true })
+    .eq('id', chatId);
+
+  if (updateError) {
+    console.error('[OPERATIONAL] Error update:', updateError.message);
+    return bot.sendMessage(chatId, '⚠️ Gagal mengubah status.');
+  }
 
   await auditLog({
     actor: userId,
@@ -186,7 +238,6 @@ async function handleOperational(bot, msg) {
   );
 }
 
-
 /**
  * /outlets
  * Owner: lihat semua outlet + status
@@ -200,20 +251,29 @@ async function handleOutlets(bot, msg) {
     return bot.sendMessage(chatId, '⛔ Hanya owner yang bisa akses daftar semua outlet.');
   }
 
-  const { data: outlets } = await supabase
+  const { data: outlets, error: outletsError } = await supabase
     .from('outlets')
     .select('id, name, is_active, is_operational')
     .order('name');
+
+  if (outletsError) {
+    console.error('[OUTLETS] Error ambil outlets:', outletsError.message);
+    return bot.sendMessage(chatId, '⚠️ Terjadi error.');
+  }
 
   if (!outlets || outlets.length === 0) {
     return bot.sendMessage(chatId, 'ℹ️ Belum ada outlet terdaftar.');
   }
 
   // Hitung jumlah member per outlet
-  const { data: memberCounts } = await supabase
+  const { data: memberCounts, error: memberError } = await supabase
     .from('outlet_members')
     .select('outlet_id')
     .eq('is_active', true);
+
+  if (memberError) {
+    console.error('[OUTLETS] Error hitung member:', memberError.message);
+  }
 
   const countMap = {};
   memberCounts?.forEach(m => {
@@ -232,7 +292,6 @@ async function handleOutlets(bot, msg) {
 
   bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
 }
-
 
 function register(bot) {
   bot.onText(/\/reset$/, (msg) => handleReset(bot, msg));

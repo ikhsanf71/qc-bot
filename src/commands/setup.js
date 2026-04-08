@@ -25,28 +25,38 @@ async function handleSetup(bot, msg, match) {
   }
 
   // Cek apakah sudah terdaftar
-  const existing = await supabase
+  const { data: existing, error: existingError } = await supabase
     .from('outlets')
     .select('id, name')
     .eq('id', chatId)
-    .single();
+    .maybeSingle();
 
-  if (existing.data) {
+  if (existingError) {
+    console.error('[SETUP] Error cek existing:', existingError.message);
+    return bot.sendMessage(chatId, '⚠️ Terjadi error, coba lagi.');
+  }
+
+  if (existing) {
     return bot.sendMessage(chatId,
-      `ℹ️ Outlet ini sudah terdaftar sebagai *${escapeMarkdown(existing.data.name)}*\n` +
+      `ℹ️ Outlet ini sudah terdaftar sebagai *${escapeMarkdown(existing.name)}*\n` +
       `Gunakan /addmanager @username untuk assign manager.`,
       { parse_mode: 'Markdown' }
     );
   }
 
-  await dbQuery(() =>
-    supabase.from('outlets').insert({
+  const { error: insertError } = await supabase
+    .from('outlets')
+    .insert({
       id: chatId,
       name,
       is_active: true,
       is_operational: true
-    })
-  );
+    });
+
+  if (insertError) {
+    console.error('[SETUP] Error insert outlet:', insertError.message);
+    return bot.sendMessage(chatId, '⚠️ Gagal mendaftarkan outlet.');
+  }
 
   await auditLog({
     actor: userId,
@@ -64,7 +74,6 @@ async function handleSetup(bot, msg, match) {
   );
 }
 
-
 /**
  * /addmanager @username
  * Owner assign manager ke outlet ini
@@ -80,11 +89,16 @@ async function handleAddManager(bot, msg, match) {
   }
 
   // Validasi outlet sudah setup
-  const { data: outlet } = await supabase
+  const { data: outlet, error: outletError } = await supabase
     .from('outlets')
     .select('id, name')
     .eq('id', chatId)
-    .single();
+    .maybeSingle();
+
+  if (outletError) {
+    console.error('[ADDMANAGER] Error ambil outlet:', outletError.message);
+    return bot.sendMessage(chatId, '⚠️ Terjadi error.');
+  }
 
   if (!outlet) {
     return bot.sendMessage(chatId, '❌ Outlet belum di-setup. Jalankan /setup NamaOutlet dulu.');
@@ -97,13 +111,17 @@ async function handleAddManager(bot, msg, match) {
   const username = usernameRaw.replace('@', '').toLowerCase();
 
   // Cek apakah sudah ada invite pending untuk outlet ini
-  const { data: existingInvite } = await supabase
+  const { data: existingInvite, error: inviteError } = await supabase
     .from('manager_invites')
     .select('id')
     .eq('outlet_id', chatId)
     .eq('username', username)
     .eq('status', 'pending')
-    .single();
+    .maybeSingle();
+
+  if (inviteError) {
+    console.error('[ADDMANAGER] Error cek invite:', inviteError.message);
+  }
 
   if (existingInvite) {
     return bot.sendMessage(chatId,
@@ -113,22 +131,31 @@ async function handleAddManager(bot, msg, match) {
   }
 
   // Cek apakah user sudah terdaftar di sistem (pernah /daftar)
-  const { data: user } = await supabase
+  const { data: user, error: userError } = await supabase
     .from('users')
     .select('telegram_id, full_name')
     .eq('username', username)
-    .single();
+    .maybeSingle();
+
+  if (userError) {
+    console.error('[ADDMANAGER] Error cek user:', userError.message);
+  }
 
   // Buat invite
-  await dbQuery(() =>
-    supabase.from('manager_invites').insert({
+  const { error: insertError } = await supabase
+    .from('manager_invites')
+    .insert({
       telegram_id: user?.telegram_id || null,
       username,
       outlet_id: chatId,
       invited_by: userId,
       status: 'pending'
-    })
-  );
+    });
+
+  if (insertError) {
+    console.error('[ADDMANAGER] Error insert invite:', insertError.message);
+    return bot.sendMessage(chatId, '⚠️ Gagal membuat invite.');
+  }
 
   // Kalau sudah terdaftar & kita tahu telegram_id-nya → langsung DM
   if (user?.telegram_id) {
@@ -166,7 +193,6 @@ async function handleAddManager(bot, msg, match) {
   }
 }
 
-
 /**
  * /accept
  * Manager konfirmasi invite di chat pribadi dengan bot
@@ -182,7 +208,7 @@ async function handleAccept(bot, msg) {
   // Cari invite pending berdasarkan telegram_id atau username
   const username = msg.from.username?.toLowerCase();
 
-  const { data: invite } = await supabase
+  const { data: invite, error: inviteError } = await supabase
     .from('manager_invites')
     .select('*, outlets(name)')
     .or(`telegram_id.eq.${userId},username.eq.${username}`)
@@ -190,7 +216,12 @@ async function handleAccept(bot, msg) {
     .gt('expires_at', new Date().toISOString())
     .order('created_at', { ascending: false })
     .limit(1)
-    .single();
+    .maybeSingle();
+
+  if (inviteError) {
+    console.error('[ACCEPT] Error ambil invite:', inviteError.message);
+    return bot.sendMessage(chatId, '⚠️ Terjadi error, coba lagi.');
+  }
 
   if (!invite) {
     return bot.sendMessage(chatId,
@@ -200,11 +231,15 @@ async function handleAccept(bot, msg) {
   }
 
   // Pastikan user sudah /daftar
-  const { data: user } = await supabase
+  const { data: user, error: userError } = await supabase
     .from('users')
     .select('telegram_id, full_name')
     .eq('telegram_id', userId)
-    .single();
+    .maybeSingle();
+
+  if (userError) {
+    console.error('[ACCEPT] Error ambil user:', userError.message);
+  }
 
   if (!user) {
     return bot.sendMessage(chatId,
@@ -215,24 +250,32 @@ async function handleAccept(bot, msg) {
   }
 
   // Update invite → accepted
-  await dbQuery(() =>
-    supabase
-      .from('manager_invites')
-      .update({ status: 'accepted', telegram_id: userId })
-      .eq('id', invite.id)
-  );
+  const { error: updateError } = await supabase
+    .from('manager_invites')
+    .update({ status: 'accepted', telegram_id: userId })
+    .eq('id', invite.id);
+
+  if (updateError) {
+    console.error('[ACCEPT] Error update invite:', updateError.message);
+    return bot.sendMessage(chatId, '⚠️ Gagal konfirmasi invite.');
+  }
 
   // Upsert outlet_members dengan role manager
-  await dbQuery(() =>
-    supabase.from('outlet_members').upsert({
+  const { error: upsertError } = await supabase
+    .from('outlet_members')
+    .upsert({
       telegram_id: userId,
       outlet_id: invite.outlet_id,
       role: ROLES.MANAGER,
       is_active: true,
       joined_at: new Date().toISOString(),
       left_at: null
-    }, { onConflict: 'telegram_id,outlet_id' })
-  );
+    }, { onConflict: 'telegram_id,outlet_id' });
+
+  if (upsertError) {
+    console.error('[ACCEPT] Error upsert member:', upsertError.message);
+    return bot.sendMessage(chatId, '⚠️ Gagal menyimpan role manager.');
+  }
 
   await auditLog({
     actor: userId,
@@ -254,7 +297,6 @@ async function handleAccept(bot, msg) {
   );
 }
 
-
 /**
  * /reject
  * Manager tolak invite
@@ -268,7 +310,7 @@ async function handleReject(bot, msg) {
     return bot.sendMessage(chatId, '❌ /reject hanya bisa di chat pribadi dengan bot.');
   }
 
-  const { data: invite } = await supabase
+  const { data: invite, error: inviteError } = await supabase
     .from('manager_invites')
     .select('id, outlet_id, invited_by, outlets(name)')
     .or(`telegram_id.eq.${userId},username.eq.${username}`)
@@ -276,18 +318,25 @@ async function handleReject(bot, msg) {
     .gt('expires_at', new Date().toISOString())
     .order('created_at', { ascending: false })
     .limit(1)
-    .single();
+    .maybeSingle();
+
+  if (inviteError) {
+    console.error('[REJECT] Error ambil invite:', inviteError.message);
+    return bot.sendMessage(chatId, '⚠️ Terjadi error.');
+  }
 
   if (!invite) {
     return bot.sendMessage(chatId, '❌ Tidak ada invite aktif untukmu.');
   }
 
-  await dbQuery(() =>
-    supabase
-      .from('manager_invites')
-      .update({ status: 'expired' })
-      .eq('id', invite.id)
-  );
+  const { error: updateError } = await supabase
+    .from('manager_invites')
+    .update({ status: 'expired' })
+    .eq('id', invite.id);
+
+  if (updateError) {
+    console.error('[REJECT] Error update invite:', updateError.message);
+  }
 
   // Notif ke owner
   try {
@@ -299,7 +348,6 @@ async function handleReject(bot, msg) {
 
   bot.sendMessage(chatId, '✅ Invite ditolak. Owner akan diberitahu.');
 }
-
 
 function register(bot) {
   bot.onText(/\/setup (.+)/, (msg, match) => handleSetup(bot, msg, match));

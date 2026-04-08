@@ -25,7 +25,6 @@ function getNowWIB() {
   }).format(new Date());
 }
 
-
 // ==========================
 // 🔠 FORMAT
 // ==========================
@@ -42,19 +41,20 @@ function formatStatus(s) {
 }
 
 /**
- * Mention user dengan nama (klik → buka profil Telegram)
- */
-function mentionUser(telegramId, name) {
-  return `[${name}](tg://user?id=${telegramId})`;
-}
-
-/**
- * Escape karakter Markdown agar tidak crash saat parse_mode: Markdown
+ * Escape karakter Markdown
  */
 function escapeMarkdown(text) {
+  if (!text) return '';
   return String(text).replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
 }
 
+/**
+ * Mention user dengan nama (klik → buka profil Telegram)
+ * PERBAIKAN: nama di-escape dulu
+ */
+function mentionUser(telegramId, name) {
+  return `[${escapeMarkdown(name)}](tg://user?id=${telegramId})`;
+}
 
 // ==========================
 // ✅ VALIDASI
@@ -78,7 +78,6 @@ function normalizePhone(phone) {
   return cleaned;
 }
 
-
 // ==========================
 // 🛡️ SAFE DB QUERY
 // ==========================
@@ -92,7 +91,6 @@ async function dbQuery(queryFn) {
   if (error) throw error;
   return data;
 }
-
 
 module.exports = {
   getToday,

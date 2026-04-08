@@ -6,85 +6,98 @@ const { isOwner, isManagerOrOwner } = require('../middleware');
  * Build teks dashboard untuk satu outlet
  */
 async function buildDashboardText(outletId, outletName, date) {
-  const { data: absenList } = await supabase
-    .from('absen')
-    .select('telegram_id, status, users(full_name)')
-    .eq('outlet_id', outletId)
-    .eq('date', date);
+  try {
+    const { data: absenList, error: absenError } = await supabase
+      .from('absen')
+      .select('telegram_id, status, users(full_name)')
+      .eq('outlet_id', outletId)
+      .eq('date', date);
 
-  const { data: qcList } = await supabase
-    .from('qc_logs')
-    .select('telegram_id, type')
-    .eq('outlet_id', outletId)
-    .eq('date', date);
-
-  if (!absenList || absenList.length === 0) {
-    return `📊 *${escapeMarkdown(outletName)}*\n_Belum ada yang absen hari ini._\n`;
-  }
-
-  // Build map per user
-  const map = {};
-  absenList.forEach(a => {
-    map[a.telegram_id] = {
-      id: a.telegram_id,
-      name: a.users?.full_name || `User ${a.telegram_id}`,
-      status: a.status,
-      before: false,
-      after: false
-    };
-  });
-
-  qcList?.forEach(q => {
-    if (map[q.telegram_id]) {
-      map[q.telegram_id][q.type] = true;
+    if (absenError) {
+      console.error('[DASHBOARD] Error ambil absen:', absenError.message);
+      return `📊 *${escapeMarkdown(outletName)}*\n_Gagal mengambil data._`;
     }
-  });
 
-  const users = Object.values(map);
-  const hadir = users.filter(u => u.status === 'h');
-  const tidakHadir = users.filter(u => u.status !== 'h');
-  const belumLengkap = hadir.filter(u => !u.before || !u.after);
-  const lengkap = hadir.filter(u => u.before && u.after);
+    const { data: qcList, error: qcError } = await supabase
+      .from('qc_logs')
+      .select('telegram_id, type')
+      .eq('outlet_id', outletId)
+      .eq('date', date);
 
-  let text = `📊 *${escapeMarkdown(outletName)}* — ${date}\n`;
-  text += `👥 Total: ${users.length} | ✅ Hadir: ${hadir.length}\n\n`;
+    if (qcError) {
+      console.error('[DASHBOARD] Error ambil qc:', qcError.message);
+    }
 
-  // Yang hadir
-  if (hadir.length > 0) {
-    text += `*Hadir:*\n`;
-    hadir.forEach(u => {
-      const b = u.before ? '✅' : '❌';
-      const a = u.after ? '✅' : '❌';
-      text += `• ${escapeMarkdown(u.name)} — Before:${b} After:${a}\n`;
+    if (!absenList || absenList.length === 0) {
+      return `📊 *${escapeMarkdown(outletName)}*\n_Belum ada yang absen hari ini._\n`;
+    }
+
+    // Build map per user
+    const map = {};
+    absenList.forEach(a => {
+      map[a.telegram_id] = {
+        id: a.telegram_id,
+        name: a.users?.full_name || `User ${a.telegram_id}`,
+        status: a.status,
+        before: false,
+        after: false
+      };
     });
-    text += '\n';
-  }
 
-  // Tidak hadir
-  if (tidakHadir.length > 0) {
-    text += `*Tidak Hadir:*\n`;
-    tidakHadir.forEach(u => {
-      text += `• ${escapeMarkdown(u.name)} — ${formatStatus(u.status)}\n`;
+    qcList?.forEach(q => {
+      if (map[q.telegram_id]) {
+        map[q.telegram_id][q.type] = true;
+      }
     });
-    text += '\n';
-  }
 
-  // Reminder yang belum lengkap
-  if (belumLengkap.length > 0) {
-    text += `🚨 *Belum Lengkap:*\n`;
-    belumLengkap.forEach(u => {
-      const kurang = [];
-      if (!u.before) kurang.push('Before');
-      if (!u.after) kurang.push('After');
-      text += `• ${mentionUser(u.id, u.name)} — kurang: ${kurang.join(', ')}\n`;
-    });
-  } else if (hadir.length > 0) {
-    text += `🎉 Semua yang hadir sudah lengkap QC-nya!`;
-  }
+    const users = Object.values(map);
+    const hadir = users.filter(u => u.status === 'h');
+    const tidakHadir = users.filter(u => u.status !== 'h');
+    const belumLengkap = hadir.filter(u => !u.before || !u.after);
+    const lengkap = hadir.filter(u => u.before && u.after);
 
-  return text;
+    let text = `📊 *${escapeMarkdown(outletName)}* — ${date}\n`;
+    text += `👥 Total: ${users.length} | ✅ Hadir: ${hadir.length}\n\n`;
+
+    // Yang hadir
+    if (hadir.length > 0) {
+      text += `*Hadir:*\n`;
+      hadir.forEach(u => {
+        const b = u.before ? '✅' : '❌';
+        const a = u.after ? '✅' : '❌';
+        text += `• ${escapeMarkdown(u.name)} — Before:${b} After:${a}\n`;
+      });
+      text += '\n';
+    }
+
+    // Tidak hadir
+    if (tidakHadir.length > 0) {
+      text += `*Tidak Hadir:*\n`;
+      tidakHadir.forEach(u => {
+        text += `• ${escapeMarkdown(u.name)} — ${formatStatus(u.status)}\n`;
+      });
+      text += '\n';
+    }
+
+    // Reminder yang belum lengkap
+    if (belumLengkap.length > 0) {
+      text += `🚨 *Belum Lengkap:*\n`;
+      belumLengkap.forEach(u => {
+        const kurang = [];
+        if (!u.before) kurang.push('Before');
+        if (!u.after) kurang.push('After');
+        text += `• ${mentionUser(u.id, u.name)} — kurang: ${kurang.join(', ')}\n`;
+      });
+    } else if (hadir.length > 0) {
+      text += `🎉 Semua yang hadir sudah lengkap QC-nya!`;
+    }
+
+    return text;
+  } catch (err) {
+    console.error('[DASHBOARD] Error buildDashboardText:', err);
+    return `📊 *${escapeMarkdown(outletName)}*\n⚠️ Terjadi error saat mengambil data.`;
+  }
 }
-
 
 /**
  * /dashboard
@@ -96,11 +109,16 @@ async function handleDashboard(bot, msg) {
   const today = getToday();
 
   // Validasi outlet
-  const { data: outlet } = await supabase
+  const { data: outlet, error: outletError } = await supabase
     .from('outlets')
     .select('id, name')
     .eq('id', chatId)
-    .single();
+    .maybeSingle();
+
+  if (outletError) {
+    console.error('[DASHBOARD] Error ambil outlet:', outletError.message);
+    return bot.sendMessage(chatId, '⚠️ Terjadi error, coba lagi.');
+  }
 
   if (!outlet) {
     return bot.sendMessage(chatId, '❌ Outlet ini belum terdaftar.');
@@ -113,10 +131,8 @@ async function handleDashboard(bot, msg) {
   }
 
   const text = await buildDashboardText(outlet.id, outlet.name, today);
-
   bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
 }
-
 
 /**
  * /rekap [nama_outlet]
@@ -134,8 +150,15 @@ async function handleRekap(bot, msg, match) {
   }
 
   // Ambil semua outlet aktif
-  let query = supabase.from('outlets').select('id, name').eq('is_active', true);
-  const { data: outlets } = await query;
+  const { data: outlets, error: outletsError } = await supabase
+    .from('outlets')
+    .select('id, name')
+    .eq('is_active', true);
+
+  if (outletsError) {
+    console.error('[REKAP] Error ambil outlets:', outletsError.message);
+    return bot.sendMessage(chatId, '⚠️ Terjadi error.');
+  }
 
   if (!outlets || outlets.length === 0) {
     return bot.sendMessage(chatId, 'ℹ️ Belum ada outlet yang terdaftar.');
@@ -155,7 +178,6 @@ async function handleRekap(bot, msg, match) {
     await bot.sendMessage(chatId, `⏳ Mengambil data ${filtered.length} outlet...`);
   }
 
-  // Build rekap per outlet
   // Kirim per-batch 5 outlet agar tidak timeout
   const batchSize = 5;
   for (let i = 0; i < filtered.length; i += batchSize) {
@@ -170,15 +192,23 @@ async function handleRekap(bot, msg, match) {
   }
 
   // Summary total
-  const { data: allAbsen } = await supabase
+  const { data: allAbsen, error: absenError } = await supabase
     .from('absen')
     .select('status, outlet_id')
     .eq('date', today);
 
-  const { data: allQC } = await supabase
+  if (absenError) {
+    console.error('[REKAP] Error ambil allAbsen:', absenError.message);
+  }
+
+  const { data: allQC, error: qcError } = await supabase
     .from('qc_logs')
     .select('telegram_id, outlet_id, type')
     .eq('date', today);
+
+  if (qcError) {
+    console.error('[REKAP] Error ambil allQC:', qcError.message);
+  }
 
   const totalHadir = allAbsen?.filter(a => a.status === 'h').length || 0;
   const outletAktif = new Set(allAbsen?.map(a => a.outlet_id)).size;
@@ -196,11 +226,10 @@ async function handleRekap(bot, msg, match) {
     `📈 *SUMMARY ${today}*\n\n` +
     `🏪 Outlet aktif: ${outletAktif}/${outlets.length}\n` +
     `👤 Total hadir: ${totalHadir}\n` +
-    `✅ QC lengkap: ${qcLengkap}/${totalHadir}`,
+    `✅ QC lengkap: ${qcLengkap}/${totalHadir || 0}`,
     { parse_mode: 'Markdown' }
   );
 }
-
 
 function register(bot) {
   bot.onText(/\/dashboard$/, (msg) => handleDashboard(bot, msg));

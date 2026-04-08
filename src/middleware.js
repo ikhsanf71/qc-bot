@@ -9,10 +9,17 @@ const ROLES = {
   STAFF: 'staff'
 };
 
-const OWNER_IDS = process.env.OWNER_IDS
+// Validasi OWNER_IDS dari env — filter yang NaN
+const rawOwnerIds = process.env.OWNER_IDS
   ? process.env.OWNER_IDS.split(',').map(id => parseInt(id.trim()))
   : [];
 
+const OWNER_IDS = rawOwnerIds.filter(id => !isNaN(id));
+
+if (rawOwnerIds.length !== OWNER_IDS.length) {
+  console.warn('[WARN] OWNER_IDS mengandung nilai tidak valid, diabaikan:', 
+    rawOwnerIds.filter(id => isNaN(id)));
+}
 
 // ==========================
 // 🔐 ROLE CHECKER
@@ -37,7 +44,7 @@ async function hasRole(telegramId, outletId, roles = []) {
     .eq('telegram_id', telegramId)
     .eq('outlet_id', outletId)
     .eq('is_active', true)
-    .single();
+    .maybeSingle();  // ← pakai maybeSingle biar tidak throw error
 
   if (error || !data) return false;
   return roles.includes(data.role);
@@ -51,13 +58,12 @@ async function isActiveMember(telegramId, outletId) {
   return hasRole(telegramId, outletId, [ROLES.STAFF, ROLES.MANAGER, ROLES.OWNER]);
 }
 
-
 // ==========================
 // ⏱️ RATE LIMITER
-// Simple in-memory rate limiter per user per command
-// Reset otomatis setiap 60 detik
+// Dengan max entries untuk hindari memory leak
 // ==========================
 const rateLimitMap = new Map();
+const MAX_RATE_LIMIT_ENTRIES = 10000;
 
 /**
  * Cek apakah user melebihi rate limit
@@ -82,10 +88,13 @@ function isRateLimited(userId, command, limitPerMinute = 5) {
   return timestamps.length > limitPerMinute;
 }
 
-// Bersihkan map setiap 5 menit agar tidak memory leak
+// Bersihkan map setiap 5 menit
+// Juga batasi jumlah entries untuk hindari memory leak
 setInterval(() => {
   const now = Date.now();
   const windowMs = 60 * 1000;
+
+  // Hapus expired entries
   for (const [key, timestamps] of rateLimitMap.entries()) {
     const fresh = timestamps.filter(t => now - t < windowMs);
     if (fresh.length === 0) {
@@ -94,12 +103,20 @@ setInterval(() => {
       rateLimitMap.set(key, fresh);
     }
   }
-}, 5 * 60 * 1000);
 
+  // Jika masih kebanyakan entries, hapus 20% yang paling lama tidak diakses
+  if (rateLimitMap.size > MAX_RATE_LIMIT_ENTRIES) {
+    const entries = Array.from(rateLimitMap.entries());
+    const toDelete = Math.floor(entries.length * 0.2);
+    for (let i = 0; i < toDelete; i++) {
+      rateLimitMap.delete(entries[i][0]);
+    }
+    console.log(`[RATE LIMIT] Cleanup: menghapus ${toDelete} entries, tersisa ${rateLimitMap.size}`);
+  }
+}, 5 * 60 * 1000);
 
 // ==========================
 // 🛡️ ERROR HANDLER
-// Wrapper biar setiap command handler tidak perlu try/catch sendiri
 // ==========================
 
 /**
@@ -135,7 +152,6 @@ function withCallbackErrorHandler(fn, bot) {
   };
 }
 
-
 // ==========================
 // 📝 AUDIT LOGGER
 // ==========================
@@ -150,11 +166,9 @@ async function auditLog({ actor, action, outletId, target, metadata }) {
       metadata: metadata || null
     });
   } catch (err) {
-    // Audit log gagal tidak boleh crash flow utama
     console.error('[AUDIT LOG ERROR]', err.message);
   }
 }
-
 
 module.exports = {
   ROLES,
