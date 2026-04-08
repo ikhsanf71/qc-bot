@@ -1,5 +1,5 @@
-const supabase = require('../db');
-const { isValidPhone, normalizePhone, escapeMarkdown, dbQuery } = require('../utils');
+const supabase = require('../../db');
+const { isValidPhone, normalizePhone, escapeMarkdown, dbQuery } = require('../../utils');
 const { auditLog, isRateLimited, ROLES } = require('../middleware');
 
 /**

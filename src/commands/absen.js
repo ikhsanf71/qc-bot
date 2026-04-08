@@ -1,5 +1,5 @@
-const supabase = require('../db');
-const { getToday, formatStatus, escapeMarkdown, dbQuery } = require('../utils');
+const supabase = require('../../db');
+const { getToday, formatStatus, escapeMarkdown, dbQuery } = require('../../utils');
 const { isRateLimited, isActiveMember } = require('../middleware');
 
 const VALID_STATUS = ['h', 'i', 's', 'l'];

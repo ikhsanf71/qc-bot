@@ -1,5 +1,5 @@
-const supabase = require('../db');
-const { getToday, escapeMarkdown } = require('../utils');
+const supabase = require('../../db');
+const { getToday, escapeMarkdown } = require('../../utils');
 const { isActiveMember, isRateLimited } = require('../middleware');
 
 /**

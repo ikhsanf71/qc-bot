@@ -1,6 +1,6 @@
-const supabase = require('../db');
+const supabase = require('../../db');
 const { auditLog, isOwner, isManagerOrOwner, ROLES } = require('../middleware');
-const { dbQuery, escapeMarkdown } = require('../utils');
+const { dbQuery, escapeMarkdown } = require('../../utils');
 
 /**
  * /setup NamaOutlet
