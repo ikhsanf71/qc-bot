@@ -1,6 +1,6 @@
 const cron = require('node-cron');
-const supabase = require('./db');
-const { getToday, mentionUser, escapeMarkdown } = require('./utils');
+const supabase = require('../db');
+const { getToday, mentionUser, escapeMarkdown } = require('../utils');
 const { buildDashboardText } = require('./commands/dashboard');
 
 /**
@@ -66,6 +66,71 @@ async function sendReminderToOutlet(bot, outletId, outletName) {
     await bot.sendMessage(outletId, text, { parse_mode: 'Markdown' });
   } catch (err) {
     console.error(`[CRON] Gagal kirim reminder ke outlet ${outletId}:`, err.message);
+  }
+}
+
+/**
+ * Kirim reminder skip untuk staff yang hadir, belum foto, belum skip
+ * Dijalankan jam 21:00 WIB
+ */
+async function sendSkipReminder(bot, outletId, outletName) {
+  const today = getToday();
+
+  // Ambil staff yang hadir (status 'h')
+  const { data: hadirList, error: absenError } = await supabase
+    .from('absen')
+    .select('telegram_id, users(full_name)')
+    .eq('outlet_id', outletId)
+    .eq('date', today)
+    .eq('status', 'h');
+
+  if (absenError) {
+    console.error(`[CRON] Gagal ambil hadir outlet ${outletId}:`, absenError.message);
+    return;
+  }
+
+  if (!hadirList || hadirList.length === 0) return;
+
+  // Ambil staff yang sudah kirim foto (before/after)
+  const { data: qcList } = await supabase
+    .from('qc_logs')
+    .select('telegram_id')
+    .eq('outlet_id', outletId)
+    .eq('date', today);
+
+  const sudahFoto = new Set(qcList?.map(q => q.telegram_id) || []);
+
+  // Ambil staff yang sudah skip
+  const { data: skipList } = await supabase
+    .from('qc_skips')
+    .select('telegram_id')
+    .eq('outlet_id', outletId)
+    .eq('date', today);
+
+  const sudahSkip = new Set(skipList?.map(s => s.telegram_id) || []);
+
+  // Filter: hadir, belum foto, belum skip
+  const perluReminder = hadirList.filter(h => 
+    !sudahFoto.has(h.telegram_id) && !sudahSkip.has(h.telegram_id)
+  );
+
+  if (perluReminder.length === 0) return;
+
+  let text = `🌙 *Reminder Akhir Hari*\n\n`;
+  text += `Beberapa staff belum mengirim foto QC dan belum memberikan alasan skip.\n\n`;
+  text += `*Wajib isi alasan dengan:*\n`;
+  text += `/skip Alasan kamu tidak kirim foto\n\n`;
+  text += `*Belum mengisi:*\n`;
+
+  for (const u of perluReminder) {
+    const name = u.users?.full_name || `User ${u.telegram_id}`;
+    text += `• ${mentionUser(u.telegram_id, name)}\n`;
+  }
+
+  try {
+    await bot.sendMessage(outletId, text, { parse_mode: 'Markdown' });
+  } catch (err) {
+    console.error(`[CRON] Gagal kirim skip reminder ke ${outletId}:`, err.message);
   }
 }
 
@@ -156,9 +221,16 @@ function registerCron(bot) {
     }
   }, { timezone: 'Asia/Jakarta' });
 
+  // 21:00 WIB — Reminder skip untuk yang belum foto (14:00 UTC)
+  cron.schedule('0 14 * * *', async () => {
+    console.log('[CRON] 21:00 WIB — Reminder skip QC');
+    const outlets = await getOperationalOutlets();
+    for (const outlet of outlets) {
+      await sendSkipReminder(bot, outlet.id, outlet.name);
+    }
+  }, { timezone: 'Asia/Jakarta' });
+
   // 00:01 WIB — Reset is_operational semua outlet (17:01 UTC)
-  // PERBAIKAN: sebelumnya pakai '1 0 * * *' (00:01 UTC = 07:01 WIB)
-  // Sekarang pakai '1 17 * * *' (17:01 UTC = 00:01 WIB)
   cron.schedule('1 17 * * *', async () => {
     console.log('[CRON] 00:01 WIB — Reset is_operational semua outlet');
     await resetOperationalStatus();

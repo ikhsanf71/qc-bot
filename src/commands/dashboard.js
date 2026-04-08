@@ -28,6 +28,22 @@ async function buildDashboardText(outletId, outletName, date) {
       console.error('[DASHBOARD] Error ambil qc:', qcError.message);
     }
 
+    // Ambil data skip untuk hari ini
+    const { data: skipData, error: skipError } = await supabase
+      .from('qc_skips')
+      .select('telegram_id, reason')
+      .eq('outlet_id', outletId)
+      .eq('date', date);
+
+    if (skipError) {
+      console.error('[DASHBOARD] Error ambil skip:', skipError.message);
+    }
+
+    const skipMap = {};
+    skipData?.forEach(s => {
+      skipMap[s.telegram_id] = s.reason;
+    });
+
     if (!absenList || absenList.length === 0) {
       return `📊 *${escapeMarkdown(outletName)}*\n_Belum ada yang absen hari ini._\n`;
     }
@@ -59,36 +75,38 @@ async function buildDashboardText(outletId, outletName, date) {
     let text = `📊 *${escapeMarkdown(outletName)}* — ${date}\n`;
     text += `👥 Total: ${users.length} | ✅ Hadir: ${hadir.length}\n\n`;
 
-    // Yang hadir
-    if (hadir.length > 0) {
-      text += `*Hadir:*\n`;
-      hadir.forEach(u => {
-        const b = u.before ? '✅' : '❌';
-        const a = u.after ? '✅' : '❌';
-        text += `• ${escapeMarkdown(u.name)} — Before:${b} After:${a}\n`;
+    // Yang hadir LENGKAP (foto before & after)
+    if (lengkap.length > 0) {
+      text += `✅ *Hadir & Lengkap:*\n`;
+      lengkap.forEach(u => {
+        text += `• ${escapeMarkdown(u.name)}\n`;
+      });
+      text += '\n';
+    }
+
+    // Yang hadir BELUM LENGKAP (termasuk yang sudah skip)
+    if (belumLengkap.length > 0) {
+      text += `⚠️ *Hadir tapi Belum Lengkap / Skip:*\n`;
+      belumLengkap.forEach(u => {
+        const kurang = [];
+        if (!u.before) kurang.push('Before');
+        if (!u.after) kurang.push('After');
+        const reason = skipMap[u.id] ? ` (skip: ${escapeMarkdown(skipMap[u.id].slice(0, 50))})` : '';
+        text += `• ${mentionUser(u.id, u.name)} — kurang: ${kurang.join(', ')}${reason}\n`;
       });
       text += '\n';
     }
 
     // Tidak hadir
     if (tidakHadir.length > 0) {
-      text += `*Tidak Hadir:*\n`;
+      text += `❌ *Tidak Hadir:*\n`;
       tidakHadir.forEach(u => {
         text += `• ${escapeMarkdown(u.name)} — ${formatStatus(u.status)}\n`;
       });
       text += '\n';
     }
 
-    // Reminder yang belum lengkap
-    if (belumLengkap.length > 0) {
-      text += `🚨 *Belum Lengkap:*\n`;
-      belumLengkap.forEach(u => {
-        const kurang = [];
-        if (!u.before) kurang.push('Before');
-        if (!u.after) kurang.push('After');
-        text += `• ${mentionUser(u.id, u.name)} — kurang: ${kurang.join(', ')}\n`;
-      });
-    } else if (hadir.length > 0) {
+    if (hadir.length > 0 && belumLengkap.length === 0 && lengkap.length === hadir.length) {
       text += `🎉 Semua yang hadir sudah lengkap QC-nya!`;
     }
 
@@ -222,11 +240,20 @@ async function handleRekap(bot, msg, match) {
   });
   const qcLengkap = Object.values(qcByUser).filter(s => s.has('before') && s.has('after')).length;
 
+  // Ambil total skip
+  const { data: allSkip } = await supabase
+    .from('qc_skips')
+    .select('telegram_id')
+    .eq('date', today);
+
+  const totalSkip = allSkip?.length || 0;
+
   bot.sendMessage(chatId,
     `📈 *SUMMARY ${today}*\n\n` +
     `🏪 Outlet aktif: ${outletAktif}/${outlets.length}\n` +
     `👤 Total hadir: ${totalHadir}\n` +
-    `✅ QC lengkap: ${qcLengkap}/${totalHadir || 0}`,
+    `✅ QC lengkap: ${qcLengkap}/${totalHadir || 0}\n` +
+    `📝 Skip (alasan): ${totalSkip}`,
     { parse_mode: 'Markdown' }
   );
 }

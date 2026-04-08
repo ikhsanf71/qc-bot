@@ -18,7 +18,7 @@ const TelegramBot = require('node-telegram-bot-api');
 // ==========================
 const bot = new TelegramBot(process.env.BOT_TOKEN, {
   polling: {
-    interval: 1000,      // ← 1 detik (sebelumnya 300ms)
+    interval: 1000,
     autoStart: true,
     params: { timeout: 10 }
   }
@@ -35,6 +35,7 @@ const absen     = require('./src/commands/absen');
 const foto      = require('./src/commands/foto');
 const dashboard = require('./src/commands/dashboard');
 const admin     = require('./src/commands/admin');
+const skip      = require('./src/commands/skip');
 const { registerCron } = require('./src/cron');
 
 setup.register(bot);
@@ -43,6 +44,7 @@ absen.register(bot);
 foto.register(bot);
 dashboard.register(bot);
 admin.register(bot);
+skip.register(bot);
 
 // ==========================
 // ⏰ CRON JOBS
@@ -59,7 +61,8 @@ bot.onText(/\/start|\/help/, (msg) => {
     `*Staff:*\n` +
     `• /daftar Nama Lengkap | 08xxx\n` +
     `• /absen — pilih status kehadiran\n` +
-    `• Kirim foto dengan caption: Nama - Before/After - Service\n\n` +
+    `• Kirim foto dengan caption: Nama - Before/After - Service\n` +
+    `• /skip <alasan> — jika tidak kirim foto (wajib di akhir hari)\n\n` +
     `*Manager:*\n` +
     `• /dashboard — recap outlet hari ini\n` +
     `• /libur — set outlet libur\n` +
