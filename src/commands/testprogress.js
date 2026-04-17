@@ -6,14 +6,32 @@
 
 const supabase = require('../../db');
 const { commandPattern } = require('../../utils');
-const { trainerOnly } = require('../middleware/trainerOnly');
+const { isTrainer } = require('../middleware/trainerOnly');
 const { processWeeklyProgress } = require('../crons/weeklyProgress');
 const { processDailyRewards } = require('../crons/dailyReward');
 
 async function handleTestProgress(bot, msg, match) {
+  // Validasi awal
+  if (!msg || !msg.from || !msg.chat) {
+    console.error('[TESTPROGRESS] Invalid message object');
+    return;
+  }
+
   const chatId = msg.chat.id;
-  const subCommand = match[1]?.trim().toLowerCase();
-  
+  const userId = msg.from.id;
+
+  // Cek apakah user adalah trainer atau owner
+  if (!isTrainer(userId)) {
+    console.log(`[TESTPROGRESS] User ${userId} bukan trainer, akses ditolak`);
+    return;
+  }
+
+  // Ambil sub command dari match
+  const fullText = match[0] || '';
+  const parts = fullText.split(' ');
+  const subCommand = parts[1]?.toLowerCase() || '';
+  const param = parts[2];
+
   if (!subCommand) {
     return bot.sendMessage(chatId, 
       `📋 *Test Progress System*\n\n` +
@@ -32,6 +50,7 @@ async function handleTestProgress(bot, msg, match) {
       await processWeeklyProgress(bot);
       await bot.sendMessage(chatId, '✅ Progress mingguan selesai! Cek channel.');
     } catch (err) {
+      console.error('[TESTPROGRESS] Error week:', err.message);
       await bot.sendMessage(chatId, `❌ Error: ${err.message}`);
     }
   }
@@ -42,12 +61,17 @@ async function handleTestProgress(bot, msg, match) {
       await processDailyRewards(bot);
       await bot.sendMessage(chatId, '✅ Reward harian selesai! Cek channel.');
     } catch (err) {
+      console.error('[TESTPROGRESS] Error reward:', err.message);
       await bot.sendMessage(chatId, `❌ Error: ${err.message}`);
     }
   }
   
-  if (subCommand === 'staff' && match[2]) {
-    const staffId = parseInt(match[2]);
+  if (subCommand === 'staff' && param) {
+    const staffId = parseInt(param);
+    if (isNaN(staffId)) {
+      return bot.sendMessage(chatId, '❌ Format: /testprogress staff <telegram_id>');
+    }
+    
     const { getWeekRange, calculateWeeklyPerformance } = require('../services/progressTracker');
     const { weekStart, weekEnd } = getWeekRange();
     
@@ -69,8 +93,12 @@ async function handleTestProgress(bot, msg, match) {
     );
   }
   
-  if (subCommand === 'outlet' && match[2]) {
-    const outletId = parseInt(match[2]);
+  if (subCommand === 'outlet' && param) {
+    const outletId = parseInt(param);
+    if (isNaN(outletId)) {
+      return bot.sendMessage(chatId, '❌ Format: /testprogress outlet <outlet_id>');
+    }
+    
     const { getWeekRange, processOutletProgress } = require('../services/progressTracker');
     const { weekStart, weekEnd } = getWeekRange();
     
@@ -97,7 +125,7 @@ async function handleTestProgress(bot, msg, match) {
 
 function register(bot) {
   bot.onText(commandPattern('testprogress'), (msg, match) => {
-    trainerOnly(handleTestProgress, bot)(msg, match);
+    handleTestProgress(bot, msg, match);
   });
 }
 

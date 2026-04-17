@@ -4,23 +4,30 @@
  */
 
 const { commandPattern } = require('../../utils');
-const { trainerOnly } = require('../middleware/trainerOnly');
+const { isTrainer } = require('../middleware/trainerOnly');
 const { sendEdukasiToChannel } = require('../services/channelSender');
 const { getEdukasiMessage } = require('../services/messageBank');
 
 async function handleEdukasi(bot, msg, match) {
   // Validasi awal
-  if (!msg || !msg.chat) {
+  if (!msg || !msg.from || !msg.chat) {
     console.error('[EDUKASI] Invalid message object');
     return;
   }
 
   const chatId = msg.chat.id;
-  
-  // Cek apakah match dan match[1] ada
+  const userId = msg.from.id;
+
+  // Cek apakah user adalah trainer
+  if (!isTrainer(userId)) {
+    console.log(`[EDUKASI] User ${userId} bukan trainer, akses ditolak`);
+    return;
+  }
+
+  // Ambil text dari command
   let text = null;
   if (match && match[1]) {
-    text = match[1]?.trim();
+    text = match[1].trim();
   }
 
   // Jika tidak ada text, ambil dari bank kalimat
@@ -32,7 +39,7 @@ async function handleEdukasi(bot, msg, match) {
     return bot.sendMessage(chatId, '❌ Format: /edukasi <teks edukasi>\nContoh: /edukasi Lighting yang baik membuat foto lebih jelas');
   }
 
-  console.log(`[EDUKASI] Mengirim ke channel: ${text.substring(0, 50)}...`);
+  console.log(`[EDUKASI] Trainer ${userId} mengirim: ${text.substring(0, 50)}...`);
   
   const success = await sendEdukasiToChannel(bot, text);
   
@@ -45,7 +52,7 @@ async function handleEdukasi(bot, msg, match) {
 
 function register(bot) {
   bot.onText(commandPattern('edukasi'), (msg, match) => {
-    trainerOnly(handleEdukasi, bot)(msg, match);
+    handleEdukasi(bot, msg, match);
   });
 }
 

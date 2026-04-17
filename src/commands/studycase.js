@@ -4,21 +4,27 @@
  */
 
 const { commandPattern } = require('../../utils');
-const { trainerOnly } = require('../middleware/trainerOnly');
+const { isTrainer } = require('../middleware/trainerOnly');
 const { sendStudyCaseToChannel } = require('../services/channelSender');
 const { getEdukasiMessage } = require('../services/messageBank');
 
 async function handleStudyCase(bot, msg, match) {
-  if (!msg || !msg.chat) {
+  if (!msg || !msg.from || !msg.chat) {
     console.error('[STUDYCASE] Invalid message object');
     return;
   }
 
   const chatId = msg.chat.id;
-  
+  const userId = msg.from.id;
+
+  if (!isTrainer(userId)) {
+    console.log(`[STUDYCASE] User ${userId} bukan trainer, akses ditolak`);
+    return;
+  }
+
   let text = null;
   if (match && match[1]) {
-    text = match[1]?.trim();
+    text = match[1].trim();
   }
 
   if (!text) {
@@ -29,7 +35,7 @@ async function handleStudyCase(bot, msg, match) {
     return bot.sendMessage(chatId, '❌ Format: /studycase <teks pembelajaran>');
   }
 
-  console.log(`[STUDYCASE] Mengirim ke channel: ${text.substring(0, 50)}...`);
+  console.log(`[STUDYCASE] Trainer ${userId} mengirim: ${text.substring(0, 50)}...`);
   
   const success = await sendStudyCaseToChannel(bot, text);
   
@@ -42,7 +48,7 @@ async function handleStudyCase(bot, msg, match) {
 
 function register(bot) {
   bot.onText(commandPattern('studycase'), (msg, match) => {
-    trainerOnly(handleStudyCase, bot)(msg, match);
+    handleStudyCase(bot, msg, match);
   });
 }
 
