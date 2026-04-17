@@ -28,14 +28,15 @@ console.log('🚀 QC Bot starting...');
 // ==========================
 // 📦 REGISTER COMMANDS
 // ==========================
-const setup     = require('./src/commands/setup');
-const daftar    = require('./src/commands/daftar');
-const absen     = require('./src/commands/absen');
-const foto      = require('./src/commands/foto');
-const dashboard = require('./src/commands/dashboard');
-const admin     = require('./src/commands/admin');
-const skip      = require('./src/commands/skip');
+const setup       = require('./src/commands/setup');
+const daftar      = require('./src/commands/daftar');
+const absen       = require('./src/commands/absen');
+const foto        = require('./src/commands/foto');
+const dashboard   = require('./src/commands/dashboard');
+const admin       = require('./src/commands/admin');
+const skip        = require('./src/commands/skip');
 const testlaporan = require('./src/commands/testlaporan');
+const statistik   = require('./src/commands/statistik');
 
 setup.register(bot);
 daftar.register(bot);
@@ -45,6 +46,7 @@ dashboard.register(bot);
 admin.register(bot);
 skip.register(bot);
 testlaporan.register(bot);
+statistik.register(bot);
 
 // ==========================
 // ⏰ CRON JOBS
@@ -60,7 +62,6 @@ bot.on('message', (msg) => {
   const messageText = msg.text || '';
   const botUsername = process.env.BOT_USERNAME;
   
-  // Cek apakah pesan mention bot
   if (messageText.includes(`@${botUsername}`)) {
     bot.sendMessage(chatId, 
       `🤖 *Halo! Saya QC Bot*\n\n` +
@@ -99,11 +100,27 @@ bot.onText(/\/start|\/help/, (msg) => {
     `• /addmanager @username — assign manager\n` +
     `• /rekap — recap semua outlet\n` +
     `• /outlets — daftar semua outlet\n` +
-    `• /reset — hapus data hari ini (dengan konfirmasi)\n\n` +
+    `• /reset — hapus data hari ini (dengan konfirmasi)\n` +
+    `• /statistik atau /bulanan — statistik bulanan\n\n` +
     `📊 *Laporan harian dikirim ke HQ setiap jam 22:05 WIB*`,
     { parse_mode: 'Markdown' }
   );
 });
+
+// ==========================
+// 🔔 NOTIFIKASI ERROR KE OWNER
+// ==========================
+async function notifyOwner(errorMsg) {
+  const OWNER_IDS = process.env.OWNER_IDS ? process.env.OWNER_IDS.split(',') : [];
+  for (const ownerId of OWNER_IDS) {
+    try {
+      await bot.sendMessage(parseInt(ownerId), 
+        `⚠️ *Bot Error*\n\n${errorMsg}\n\nWaktu: ${new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}`,
+        { parse_mode: 'Markdown' }
+      );
+    } catch(e) {}
+  }
+}
 
 // ==========================
 // 🛡️ GLOBAL ERROR HANDLER
@@ -112,14 +129,19 @@ bot.on('polling_error', (err) => {
   console.error('[POLLING ERROR]', err.code, err.message);
 });
 
-process.on('uncaughtException', (err) => {
+process.on('uncaughtException', async (err) => {
   console.error('[UNCAUGHT EXCEPTION]', err);
+  await notifyOwner(`\`\`\`${err.message}\`\`\``);
 });
 
-process.on('unhandledRejection', (reason) => {
+process.on('unhandledRejection', async (reason) => {
   console.error('[UNHANDLED REJECTION]', reason);
+  await notifyOwner(`\`\`\`${reason}\`\`\``);
 });
 
+// ==========================
+// 🚀 BOT READY
+// ==========================
 console.log('🔥 QC Bot READY!');
 console.log('📋 Sistem berjalan dengan fitur:');
 console.log('   - Validasi caption ketat (format 5 bagian)');
@@ -129,3 +151,5 @@ console.log('   - Laporan harian otomatis jam 22:05 WIB');
 console.log('   - Filter HQ (hanya foto AFTER prioritas)');
 console.log('   - Reminder 11:00, 14:00, 17:00, 21:30 WIB');
 console.log('   - Support mention @' + process.env.BOT_USERNAME);
+console.log('   - Statistik bulanan (/statistik)');
+console.log('   - Notifikasi error ke owner');
