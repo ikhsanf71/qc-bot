@@ -36,6 +36,8 @@ const foto      = require('./src/commands/foto');
 const dashboard = require('./src/commands/dashboard');
 const admin     = require('./src/commands/admin');
 const skip      = require('./src/commands/skip');
+const testlaporan = require('./src/commands/testlaporan');
+testlaporan.register(bot);
 
 setup.register(bot);
 daftar.register(bot);
