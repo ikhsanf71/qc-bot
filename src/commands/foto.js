@@ -1,30 +1,17 @@
 const supabase = require('../../db');
-const { getToday, escapeMarkdown, dbQuery } = require('../../utils');
+const { getToday, escapeMarkdown } = require('../../utils');
 const { isRateLimited, isActiveMember } = require('../middleware');
-
-/**
- * Format caption yang valid:
- * "Nama - Before - Nama Service"
- * "Nama - After - Nama Service"
- *
- * Minimal harus ada kata "before" atau "after" di caption
- */
-function parseCaption(caption) {
-  if (!caption) return null;
-
-  const lower = caption.toLowerCase();
-  const hasBefore = lower.includes('before');
-  const hasAfter = lower.includes('after');
-
-  if (!hasBefore && !hasAfter) return null;
-  if (hasBefore && hasAfter) return null; // ambiguous
-
-  return hasBefore ? 'before' : 'after';
-}
+const { parseCaption } = require('../services/captionParser');
+const { validateQCUpload, getUserQCStatus } = require('../services/qcValidator');
+const { shouldForwardToHQ } = require('../services/hqFilter');
 
 /**
  * Handler foto masuk ke grup
- * Hanya proses kalau user hadir hari ini
+ * Proses upload foto QC dengan validasi ketat:
+ * - Format caption wajib: Nama - Before/After - Treatment - HH:MM-HH:MM - Outlet
+ * - User harus sudah absen dengan status HADIR
+ * - Maksimal 1 before dan 1 after per hari
+ * - Foto AFTER prioritas akan dikirim ke HQ jika belum lengkap
  */
 async function handleFoto(bot, msg) {
   const chatId = msg.chat.id;
@@ -32,26 +19,29 @@ async function handleFoto(bot, msg) {
   const caption = msg.caption || '';
   const today = getToday();
 
-  // Rate limit: max 10 foto per menit (per user)
+  // Rate limit: max 10 foto per menit per user
   if (isRateLimited(userId, 'foto', 10)) {
     return bot.sendMessage(chatId, '⏳ Terlalu banyak foto. Coba lagi sebentar.');
   }
 
-  // Validasi outlet terdaftar
+  // 1. Validasi outlet terdaftar dan aktif
   const { data: outlet, error: outletError } = await supabase
     .from('outlets')
-    .select('id, is_active')
+    .select('id, name, is_active')
     .eq('id', chatId)
     .maybeSingle();
 
   if (outletError) {
     console.error('[FOTO] Error ambil outlet:', outletError.message);
+    return bot.sendMessage(chatId, '⚠️ Terjadi error. Coba lagi nanti.');
+  }
+
+  if (!outlet || !outlet.is_active) {
+    // Bukan grup outlet yang terdaftar, abaikan diam-diam
     return;
   }
 
-  if (!outlet || !outlet.is_active) return; // bukan grup outlet, abaikan
-
-  // Validasi user terdaftar & aktif di outlet ini
+  // 2. Validasi user adalah anggota aktif outlet
   const isMember = await isActiveMember(userId, chatId);
   if (!isMember) {
     return bot.sendMessage(chatId,
@@ -60,80 +50,48 @@ async function handleFoto(bot, msg) {
     );
   }
 
-  // Validasi caption
-  const type = parseCaption(caption);
-  if (!type) {
+  // 3. Validasi format caption (menggunakan service)
+  const parsed = parseCaption(caption);
+  if (!parsed) {
     return bot.sendMessage(chatId,
-      '❌ Format caption tidak valid.\n\n' +
-      'Gunakan: `Nama - Before - Nama Service`\n' +
-      'atau: `Nama - After - Nama Service`\n\n' +
-      'Pastikan ada kata *before* atau *after* di caption.',
+      `❌ *Format caption salah!*\n\n` +
+      `Gunakan format wajib:\n` +
+      `Nama - Before/After - Treatment - HH:MM-HH:MM - Outlet\n\n` +
+      `Contoh:\n` +
+      `Andi - After - Gel Polish - 14:00-15:30 - Outlet A\n\n` +
+      `📌 Pastikan:\n` +
+      `• Ada kata "Before" atau "After"\n` +
+      `• Format jam HH:MM-HH:MM (contoh: 09:00-10:30)\n` +
+      `• Semua bagian diisi (nama, treatment, outlet)`,
       { parse_mode: 'Markdown' }
     );
   }
 
-  // Validasi user sudah absen & statusnya hadir
-  const { data: absen, error: absenError } = await supabase
-    .from('absen')
-    .select('status')
-    .eq('outlet_id', chatId)
-    .eq('telegram_id', userId)
-    .eq('date', today)
-    .maybeSingle();
-
-  if (absenError) {
-    console.error('[FOTO] Error cek absen:', absenError.message);
-    return bot.sendMessage(chatId, '⚠️ Terjadi error, coba lagi.');
+  // 4. Validasi QC (absen, status hadir, tidak duplikat)
+  const validation = await validateQCUpload(chatId, userId, parsed.type);
+  if (!validation.valid) {
+    return bot.sendMessage(chatId, validation.message, { parse_mode: 'Markdown' });
   }
 
-  if (!absen) {
-    return bot.sendMessage(chatId,
-      '⚠️ Kamu belum absen hari ini.\n' +
-      'Absen dulu dengan /absen'
-    );
-  }
-
-  if (absen.status !== 'h') {
-    return bot.sendMessage(chatId,
-      `⚠️ Kamu tidak bisa kirim foto QC karena status hari ini bukan Hadir.`
-    );
-  }
-
-  // Cek apakah sudah kirim foto tipe ini hari ini
-  const { data: existing, error: existingError } = await supabase
-    .from('qc_logs')
-    .select('id')
-    .eq('outlet_id', chatId)
-    .eq('telegram_id', userId)
-    .eq('date', today)
-    .eq('type', type)
-    .maybeSingle();
-
-  if (existingError) {
-    console.error('[FOTO] Error cek existing:', existingError.message);
-  }
-
-  if (existing) {
-    return bot.sendMessage(chatId,
-      `⚠️ Foto *${type}* sudah dikirim hari ini.\n` +
-      `Tidak bisa kirim ulang. Hubungi manager jika ada masalah.`,
-      { parse_mode: 'Markdown' }
-    );
-  }
-
-  // Ambil file_id foto resolusi tertinggi
+  // 5. Ambil file_id foto resolusi tertinggi
   const photos = msg.photo;
   const fileId = photos[photos.length - 1].file_id;
 
+  // 6. Simpan foto ke database dengan data terstruktur
   const { error: insertError } = await supabase
     .from('qc_logs')
     .insert({
       outlet_id: chatId,
       telegram_id: userId,
       date: today,
-      type,
+      type: parsed.type,
       file_id: fileId,
-      caption: caption.slice(0, 500)
+      caption: caption.slice(0, 500),
+      start_time: parsed.startTime,
+      end_time: parsed.endTime,
+      treatment: parsed.treatment,
+      outlet_name: parsed.outletName,
+      parsed: true
     });
 
   if (insertError) {
@@ -141,43 +99,64 @@ async function handleFoto(bot, msg) {
     return bot.sendMessage(chatId, '⚠️ Gagal menyimpan foto. Coba lagi.');
   }
 
-  // Cek apakah sudah lengkap (before + after)
-  const { data: allQC, error: allQcError } = await supabase
-    .from('qc_logs')
-    .select('type')
-    .eq('outlet_id', chatId)
-    .eq('telegram_id', userId)
-    .eq('date', today);
+  // 7. Cek kelengkapan QC user setelah upload
+  const qcStatus = await getUserQCStatus(chatId, userId, today);
 
-  if (allQcError) {
-    console.error('[FOTO] Error cek kelengkapan:', allQcError.message);
+  // 8. Buat pesan response
+  let response = `✅ Foto *${parsed.type}* berhasil dicatat!\n`;
+  response += `📌 Treatment: ${escapeMarkdown(parsed.treatment)}\n`;
+  response += `⏰ Waktu: ${parsed.startTime} - ${parsed.endTime}\n`;
+  response += `📍 Outlet: ${escapeMarkdown(parsed.outletName)}\n`;
+
+  if (qcStatus.isComplete) {
+    response += `\n🎉 *QC LENGKAP!* Before & After sudah masuk.\nTerima kasih atas disiplinnya! 👍`;
+  } else if (parsed.type === 'before') {
+    response += `\n📸 Jangan lupa kirim foto *AFTER* dengan format yang sama.`;
+  } else if (parsed.type === 'after' && !qcStatus.hasBefore) {
+    response += `\n⚠️ *Perhatian!* Anda belum mengirim foto BEFORE.\nMohon lengkapi QC untuk penilaian performa.`;
   }
 
-  const hasBefore = allQC?.some(q => q.type === 'before');
-  const hasAfter = allQC?.some(q => q.type === 'after');
+  await bot.sendMessage(chatId, response, { parse_mode: 'Markdown' });
 
-  const emoji = type === 'before' ? '📸' : '✨';
-  let response = `${emoji} Foto *${type}* berhasil dicatat!`;
+  // 9. Filter dan kirim ke HQ (hanya foto AFTER prioritas)
+  const shouldForward = await shouldForwardToHQ(chatId, userId, parsed.type);
+  if (shouldForward && process.env.HQ_GROUP_ID) {
+    try {
+      const hqCaption = `⚠️ *PRIORITAS - QC Tidak Lengkap*\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `📸 *Foto QC dari outlet ${escapeMarkdown(outlet.name)}*\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `👤 *Staff:* ${escapeMarkdown(parsed.name)}\n` +
+        `🛠️ *Treatment:* ${escapeMarkdown(parsed.treatment)}\n` +
+        `⏰ *Waktu:* ${parsed.startTime} - ${parsed.endTime}\n` +
+        `📌 *Status:* HANYA AFTER (tanpa dokumentasi BEFORE)\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `⚠️ Staff ini mengirim hasil akhir tanpa foto proses awal.\n` +
+        `Perlu diingatkan untuk melengkapi dokumentasi.`;
 
-  if (hasBefore && hasAfter) {
-    response += '\n\n🎉 QC hari ini *LENGKAP*! Before & After sudah masuk.';
-  } else {
-    const missing = type === 'before' ? 'after' : 'before';
-    response += `\n\nJangan lupa kirim foto *${missing}* juga ya!`;
+      await bot.sendPhoto(process.env.HQ_GROUP_ID, fileId, {
+        caption: hqCaption,
+        parse_mode: 'Markdown'
+      });
+      console.log(`[HQ FORWARD] Foto dari user ${userId} di outlet ${outlet.name} dikirim ke HQ`);
+    } catch (err) {
+      console.error('[HQ FORWARD] Error:', err.message);
+    }
   }
-
-  bot.sendMessage(chatId, response, { parse_mode: 'Markdown' });
 }
 
+/**
+ * Register event listener untuk foto
+ */
 function register(bot) {
   bot.on('photo', async (msg) => {
     try {
       await handleFoto(bot, msg);
     } catch (err) {
-      console.error('[FOTO ERROR]', err.message);
-      // PERBAIKAN: kirim pesan error ke grup agar user tahu ada masalah
+      console.error('[FOTO ERROR]', err.message, err.stack);
+      // Kirim pesan error ke grup agar user tahu ada masalah
       if (msg?.chat?.id) {
-        bot.sendMessage(msg.chat.id, '⚠️ Gagal memproses foto. Coba lagi nanti.');
+        bot.sendMessage(msg.chat.id, '⚠️ Gagal memproses foto. Coba lagi nanti atau hubungi manager.');
       }
     }
   });

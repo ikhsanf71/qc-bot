@@ -1,15 +1,20 @@
 const supabase = require('../../db');
 const { getToday, formatStatus, mentionUser, escapeMarkdown } = require('../../utils');
 const { isOwner, isManagerOrOwner } = require('../middleware');
+const { evaluateUserPerformance } = require('../services/evaluationEngine');
+const { calculateOutletScore } = require('../services/outletPerformance');
 
 /**
  * Build teks dashboard untuk satu outlet
+ * Dilengkapi dengan:
+ * - Status performa per user (PERFORM/NORMAL/WARNING)
+ * - Score outlet (EXCELLENT/OK/PROBLEM)
  */
 async function buildDashboardText(outletId, outletName, date) {
   try {
     const { data: absenList, error: absenError } = await supabase
       .from('absen')
-      .select('telegram_id, status, users(full_name)')
+      .select('telegram_id, status, created_at, users(full_name)')
       .eq('outlet_id', outletId)
       .eq('date', date);
 
@@ -20,7 +25,7 @@ async function buildDashboardText(outletId, outletName, date) {
 
     const { data: qcList, error: qcError } = await supabase
       .from('qc_logs')
-      .select('telegram_id, type')
+      .select('telegram_id, type, treatment, start_time, end_time')
       .eq('outlet_id', outletId)
       .eq('date', date);
 
@@ -48,66 +53,116 @@ async function buildDashboardText(outletId, outletName, date) {
       return `📊 *${escapeMarkdown(outletName)}*\n_Belum ada yang absen hari ini._\n`;
     }
 
-    // Build map per user
+    // Build map per user dengan data lengkap
     const map = {};
     absenList.forEach(a => {
       map[a.telegram_id] = {
         id: a.telegram_id,
         name: a.users?.full_name || `User ${a.telegram_id}`,
         status: a.status,
+        jamAbsen: a.created_at,
         before: false,
-        after: false
+        after: false,
+        treatment: null,
+        startTime: null,
+        endTime: null
       };
     });
 
     qcList?.forEach(q => {
       if (map[q.telegram_id]) {
         map[q.telegram_id][q.type] = true;
+        if (q.treatment) map[q.telegram_id].treatment = q.treatment;
+        if (q.start_time) map[q.telegram_id].startTime = q.start_time;
+        if (q.end_time) map[q.telegram_id].endTime = q.end_time;
       }
     });
 
     const users = Object.values(map);
     const hadir = users.filter(u => u.status === 'h');
     const tidakHadir = users.filter(u => u.status !== 'h');
-    const belumLengkap = hadir.filter(u => !u.before || !u.after);
-    const lengkap = hadir.filter(u => u.before && u.after);
+    
+    // Evaluasi performa setiap user yang hadir
+    const hadirDenganPerforma = hadir.map(u => {
+      const qcStatus = { hasBefore: u.before, hasAfter: u.after };
+      const absenRecord = { status: u.status };
+      const evaluation = evaluateUserPerformance(absenRecord, qcStatus);
+      return { ...u, evaluation };
+    });
+    
+    const lengkap = hadirDenganPerforma.filter(u => u.evaluation.status === 'PERFORM');
+    const belumLengkap = hadirDenganPerforma.filter(u => u.evaluation.status !== 'PERFORM');
+    
+    // Hitung score outlet
+    const totalHadir = hadir.length;
+    const totalLengkap = lengkap.length;
+    const { score, category } = calculateOutletScore(totalHadir, totalLengkap);
+    
+    // Format jam absen
+    const formatJamAbsen = (timestamp) => {
+      if (!timestamp) return '-';
+      return new Date(timestamp).toLocaleTimeString('id-ID', { 
+        hour: '2-digit', 
+        minute: '2-digit',
+        timeZone: 'Asia/Jakarta'
+      });
+    };
 
     let text = `📊 *${escapeMarkdown(outletName)}* — ${date}\n`;
-    text += `👥 Total: ${users.length} | ✅ Hadir: ${hadir.length}\n\n`;
+    text += `👥 Total: ${users.length} | ✅ Hadir: ${hadir.length}\n`;
+    text += `📊 Score Outlet: *${score}* (${category})\n\n`;
 
-    // Yang hadir LENGKAP (foto before & after)
+    // Yang hadir LENGKAP (PERFORM)
     if (lengkap.length > 0) {
-      text += `✅ *Hadir & Lengkap:*\n`;
+      text += `✅ *HADIR & LENGKAP (PERFORM)*\n`;
       lengkap.forEach(u => {
-        text += `• ${escapeMarkdown(u.name)}\n`;
+        text += `• ${escapeMarkdown(u.name)}`;
+        if (u.treatment) text += ` — ${escapeMarkdown(u.treatment)}`;
+        if (u.startTime && u.endTime) text += ` (${u.startTime}-${u.endTime})`;
+        text += `\n`;
       });
       text += '\n';
     }
 
-    // Yang hadir BELUM LENGKAP (termasuk yang sudah skip)
+    // Yang hadir BELUM LENGKAP (NORMAL / WARNING)
     if (belumLengkap.length > 0) {
-      text += `⚠️ *Hadir tapi Belum Lengkap / Skip:*\n`;
+      text += `⚠️ *HADIR TAPI BELUM LENGKAP*\n`;
       belumLengkap.forEach(u => {
         const kurang = [];
         if (!u.before) kurang.push('Before');
         if (!u.after) kurang.push('After');
-        const reason = skipMap[u.id] ? ` (skip: ${escapeMarkdown(skipMap[u.id].slice(0, 50))})` : '';
-        text += `• ${mentionUser(u.id, u.name)} — kurang: ${kurang.join(', ')}${reason}\n`;
+        const reason = skipMap[u.id] ? ` (skip: ${escapeMarkdown(skipMap[u.id].slice(0, 40))})` : '';
+        const statusIcon = u.evaluation.status === 'NORMAL' ? '⚠️' : '❌';
+        text += `${statusIcon} ${mentionUser(u.id, u.name)} — kurang: ${kurang.join(', ')}${reason}\n`;
       });
       text += '\n';
     }
 
     // Tidak hadir
     if (tidakHadir.length > 0) {
-      text += `❌ *Tidak Hadir:*\n`;
+      text += `❌ *TIDAK HADIR*\n`;
       tidakHadir.forEach(u => {
-        text += `• ${escapeMarkdown(u.name)} — ${formatStatus(u.status)}\n`;
+        const jamAbsen = formatJamAbsen(u.jamAbsen);
+        text += `• ${escapeMarkdown(u.name)} — ${formatStatus(u.status)} (absen: ${jamAbsen})\n`;
       });
       text += '\n';
     }
 
-    if (hadir.length > 0 && belumLengkap.length === 0 && lengkap.length === hadir.length) {
-      text += `🎉 Semua yang hadir sudah lengkap QC-nya!`;
+    // Ringkasan performa
+    const performCount = lengkap.length;
+    const normalCount = belumLengkap.filter(u => u.evaluation.status === 'NORMAL').length;
+    const warningCount = belumLengkap.filter(u => u.evaluation.status === 'WARNING').length;
+    
+    if (hadir.length > 0) {
+      text += `📈 *RINGKASAN PERFORMANCE*\n`;
+      text += `   🟢 PERFORM (lengkap): ${performCount}\n`;
+      text += `   🟡 NORMAL (sebagian): ${normalCount}\n`;
+      text += `   🔴 WARNING (tidak ada): ${warningCount}\n`;
+    }
+
+    if (hadir.length > 0 && belumLengkap.length === 0) {
+      text += `\n🎉 *SEMUA STAFF YANG HADIR LENGKAP QC-NYA!*\n`;
+      text += `👍 Pertahankan disiplin ini!`;
     }
 
     return text;
@@ -209,7 +264,7 @@ async function handleRekap(bot, msg, match) {
     await bot.sendMessage(chatId, combined, { parse_mode: 'Markdown' });
   }
 
-  // Summary total
+  // Summary total dengan score rata-rata outlet
   const { data: allAbsen, error: absenError } = await supabase
     .from('absen')
     .select('status, outlet_id')
@@ -227,6 +282,46 @@ async function handleRekap(bot, msg, match) {
   if (qcError) {
     console.error('[REKAP] Error ambil allQC:', qcError.message);
   }
+
+  // Hitung per outlet
+  const outletStats = {};
+  allAbsen?.forEach(a => {
+    if (!outletStats[a.outlet_id]) outletStats[a.outlet_id] = { hadir: 0, total: 0 };
+    outletStats[a.outlet_id].total++;
+    if (a.status === 'h') outletStats[a.outlet_id].hadir++;
+  });
+
+  const qcByOutletUser = {};
+  allQC?.forEach(q => {
+    const key = `${q.outlet_id}:${q.telegram_id}`;
+    if (!qcByOutletUser[key]) qcByOutletUser[key] = new Set();
+    qcByOutletUser[key].add(q.type);
+  });
+
+  const lengkapByOutlet = {};
+  Object.entries(qcByOutletUser).forEach(([key, types]) => {
+    const outletId = parseInt(key.split(':')[0]);
+    if (types.has('before') && types.has('after')) {
+      lengkapByOutlet[outletId] = (lengkapByOutlet[outletId] || 0) + 1;
+    }
+  });
+
+  // Hitung total score
+  let totalScore = 0;
+  let outletWithScore = 0;
+  for (const [outletId, stats] of Object.entries(outletStats)) {
+    const lengkap = lengkapByOutlet[outletId] || 0;
+    if (stats.hadir > 0) {
+      const score = (lengkap / stats.hadir) * 100;
+      totalScore += score;
+      outletWithScore++;
+    }
+  }
+  const avgScore = outletWithScore > 0 ? Math.round(totalScore / outletWithScore) : 0;
+  
+  let avgCategory = 'PROBLEM';
+  if (avgScore >= 85) avgCategory = 'EXCELLENT';
+  else if (avgScore >= 70) avgCategory = 'OK';
 
   const totalHadir = allAbsen?.filter(a => a.status === 'h').length || 0;
   const outletAktif = new Set(allAbsen?.map(a => a.outlet_id)).size;
@@ -253,7 +348,9 @@ async function handleRekap(bot, msg, match) {
     `🏪 Outlet aktif: ${outletAktif}/${outlets.length}\n` +
     `👤 Total hadir: ${totalHadir}\n` +
     `✅ QC lengkap: ${qcLengkap}/${totalHadir || 0}\n` +
-    `📝 Skip (alasan): ${totalSkip}`,
+    `📝 Skip (alasan): ${totalSkip}\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `📊 *RATA-RATA SKOR OUTLET:* ${avgScore} (${avgCategory})`,
     { parse_mode: 'Markdown' }
   );
 }
