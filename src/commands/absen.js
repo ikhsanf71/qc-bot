@@ -162,8 +162,10 @@ async function handleAbsenCallback(bot, q) {
   }
 }
 
+const { commandPattern } = require('../../utils');
+
 function register(bot) {
-  bot.onText(/\/absen$/, (msg) => handleAbsen(bot, msg));
+  bot.onText(commandPattern('absen'), (msg) => handleAbsen(bot, msg));
 
   bot.on('callback_query', async (q) => {
     if (!q.data?.startsWith('absen:')) return;

@@ -92,6 +92,10 @@ async function dbQuery(queryFn) {
   return data;
 }
 
+function commandPattern(command) {
+  return new RegExp(`^/${command}(@\\w+)?$`);
+}
+
 module.exports = {
   getToday,
   getNowWIB,
@@ -100,5 +104,6 @@ module.exports = {
   escapeMarkdown,
   isValidPhone,
   normalizePhone,
-  dbQuery
+  dbQuery,
+  commandPattern
 };

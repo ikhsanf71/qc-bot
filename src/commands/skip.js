@@ -155,8 +155,10 @@ async function handleSkip(bot, msg, match) {
   );
 }
 
+const { commandPattern } = require('../../utils');
+
 function register(bot) {
-  bot.onText(/\/skip (.+)/, (msg, match) => handleSkip(bot, msg, match));
+  bot.onText(commandPattern('skip'), (msg, match) => handleSkip(bot, msg, match));
 }
 
 module.exports = { register };

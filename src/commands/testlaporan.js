@@ -37,8 +37,10 @@ async function handleTestLaporan(bot, msg) {
   await bot.sendMessage(chatId, '✅ Selesai!');
 }
 
+const { commandPattern } = require('../../utils');
+
 function register(bot) {
-  bot.onText(/\/testlaporan/, (msg) => handleTestLaporan(bot, msg));
+  bot.onText(commandPattern('testlaporan'), (msg) => handleTestLaporan(bot, msg));
 }
 
 module.exports = { register };

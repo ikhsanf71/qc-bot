@@ -355,9 +355,11 @@ async function handleRekap(bot, msg, match) {
   );
 }
 
+const { commandPattern } = require('../../utils');
+
 function register(bot) {
-  bot.onText(/\/dashboard$/, (msg) => handleDashboard(bot, msg));
-  bot.onText(/\/rekap ?(.*)/, (msg, match) => handleRekap(bot, msg, match));
+  bot.onText(commandPattern('dashboard'), (msg) => handleDashboard(bot, msg));
+  bot.onText(commandPattern('rekap'), (msg, match) => handleRekap(bot, msg, match));
 }
 
 module.exports = { register, buildDashboardText };

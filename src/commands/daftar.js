@@ -410,10 +410,12 @@ async function handleRejectTransfer(bot, msg, match) {
   bot.sendMessage(chatId, `❌ Request dari *${escapeMarkdown(userName)}* ditolak.`, { parse_mode: 'Markdown' });
 }
 
+const { commandPattern } = require('../../utils');
+
 function register(bot) {
-  bot.onText(/\/daftar (.+)/, (msg, match) => handleDaftar(bot, msg, match));
-  bot.onText(/\/approve (\d+)/, (msg, match) => handleApprove(bot, msg, match));
-  bot.onText(/\/rejecttransfer (\d+)/, (msg, match) => handleRejectTransfer(bot, msg, match));
+  bot.onText(commandPattern('daftar'), (msg, match) => handleDaftar(bot, msg, match));
+  bot.onText(commandPattern('approve'), (msg, match) => handleApprove(bot, msg, match));
+  bot.onText(commandPattern('rejecttransfer'), (msg, match) => handleRejectTransfer(bot, msg, match));
 }
 
 module.exports = { register };

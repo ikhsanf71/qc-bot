@@ -3,7 +3,7 @@ require('dotenv').config();
 // ==========================
 // ✅ VALIDASI ENV
 // ==========================
-const REQUIRED_ENV = ['BOT_TOKEN', 'SUPABASE_URL', 'SUPABASE_KEY', 'OWNER_IDS', 'HQ_GROUP_ID'];
+const REQUIRED_ENV = ['BOT_TOKEN', 'SUPABASE_URL', 'SUPABASE_KEY', 'OWNER_IDS', 'HQ_GROUP_ID', 'BOT_USERNAME'];
 const missing = REQUIRED_ENV.filter(key => !process.env[key]);
 if (missing.length > 0) {
   console.error(`❌ Missing environment variables: ${missing.join(', ')}`);
@@ -14,7 +14,6 @@ const TelegramBot = require('node-telegram-bot-api');
 
 // ==========================
 // 🚀 INIT BOT
-// Interval 1000ms untuk menghindari rate limit
 // ==========================
 const bot = new TelegramBot(process.env.BOT_TOKEN, {
   polling: {
@@ -37,7 +36,6 @@ const dashboard = require('./src/commands/dashboard');
 const admin     = require('./src/commands/admin');
 const skip      = require('./src/commands/skip');
 const testlaporan = require('./src/commands/testlaporan');
-testlaporan.register(bot);
 
 setup.register(bot);
 daftar.register(bot);
@@ -46,15 +44,37 @@ foto.register(bot);
 dashboard.register(bot);
 admin.register(bot);
 skip.register(bot);
+testlaporan.register(bot);
 
 // ==========================
-// ⏰ CRON JOBS (NEW SYSTEM)
+// ⏰ CRON JOBS
 // ==========================
 const { registerAllCrons } = require('./src/crons');
 registerAllCrons(bot);
 
 // ==========================
-// ❓ HELP (UPDATED DENGAN FORMAT BARU)
+// 📌 SUPPORT MENTION @BOT
+// ==========================
+bot.on('message', (msg) => {
+  const chatId = msg.chat.id;
+  const messageText = msg.text || '';
+  const botUsername = process.env.BOT_USERNAME;
+  
+  // Cek apakah pesan mention bot
+  if (messageText.includes(`@${botUsername}`)) {
+    bot.sendMessage(chatId, 
+      `🤖 *Halo! Saya QC Bot*\n\n` +
+      `Ketik /help untuk melihat daftar perintah.\n\n` +
+      `📸 *Format foto wajib:*\n` +
+      `Nama - Before/After - Treatment - HH:MM-HH:MM - Outlet\n\n` +
+      `Contoh: Andi - After - Gel Polish - 14:00-15:30 - Outlet A`,
+      { parse_mode: 'Markdown' }
+    );
+  }
+});
+
+// ==========================
+// ❓ HELP
 // ==========================
 bot.onText(/\/start|\/help/, (msg) => {
   const chatId = msg.chat.id;
@@ -108,3 +128,4 @@ console.log('   - Skor outlet (EXCELLENT/OK/PROBLEM)');
 console.log('   - Laporan harian otomatis jam 22:05 WIB');
 console.log('   - Filter HQ (hanya foto AFTER prioritas)');
 console.log('   - Reminder 11:00, 14:00, 17:00, 21:30 WIB');
+console.log('   - Support mention @' + process.env.BOT_USERNAME);

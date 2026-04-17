@@ -349,11 +349,13 @@ async function handleReject(bot, msg) {
   bot.sendMessage(chatId, '✅ Invite ditolak. Owner akan diberitahu.');
 }
 
+const { commandPattern } = require('../../utils');
+
 function register(bot) {
-  bot.onText(/\/setup (.+)/, (msg, match) => handleSetup(bot, msg, match));
-  bot.onText(/\/addmanager (@\S+)/, (msg, match) => handleAddManager(bot, msg, match));
-  bot.onText(/\/accept$/, (msg) => handleAccept(bot, msg));
-  bot.onText(/\/reject$/, (msg) => handleReject(bot, msg));
+  bot.onText(commandPattern('setup'), (msg, match) => handleSetup(bot, msg, match));
+  bot.onText(commandPattern('addmanager'), (msg, match) => handleAddManager(bot, msg, match));
+  bot.onText(commandPattern('accept'), (msg) => handleAccept(bot, msg));
+  bot.onText(commandPattern('reject'), (msg) => handleReject(bot, msg));
 }
 
 module.exports = { register };

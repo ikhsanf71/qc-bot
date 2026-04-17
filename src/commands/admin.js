@@ -293,12 +293,14 @@ async function handleOutlets(bot, msg) {
   bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
 }
 
+const { commandPattern } = require('../../utils');
+
 function register(bot) {
-  bot.onText(/\/reset$/, (msg) => handleReset(bot, msg));
-  bot.onText(/\/resetconfirm$/, (msg) => handleResetConfirm(bot, msg));
-  bot.onText(/\/libur$/, (msg) => handleLibur(bot, msg));
-  bot.onText(/\/operational$/, (msg) => handleOperational(bot, msg));
-  bot.onText(/\/outlets$/, (msg) => handleOutlets(bot, msg));
+  bot.onText(commandPattern('reset'), (msg) => handleReset(bot, msg));
+  bot.onText(commandPattern('resetconfirm'), (msg) => handleResetConfirm(bot, msg));
+  bot.onText(commandPattern('libur'), (msg) => handleLibur(bot, msg));
+  bot.onText(commandPattern('operational'), (msg) => handleOperational(bot, msg));
+  bot.onText(commandPattern('outlets'), (msg) => handleOutlets(bot, msg));
 }
 
 module.exports = { register };
