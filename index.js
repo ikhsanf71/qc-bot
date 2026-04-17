@@ -3,7 +3,8 @@ require('dotenv').config();
 // ==========================
 // ✅ VALIDASI ENV
 // ==========================
-const REQUIRED_ENV = ['BOT_TOKEN', 'SUPABASE_URL', 'SUPABASE_KEY', 'OWNER_IDS', 'HQ_GROUP_ID', 'BOT_USERNAME'];
+const REQUIRED_ENV = ['BOT_TOKEN', 'SUPABASE_URL', 'SUPABASE_KEY', 'OWNER_IDS', 'HQ_GROUP_ID', 'BOT_USERNAME', 'CHANNEL_ID'];
+// TRAINER_IDS tidak wajib, opsional
 const missing = REQUIRED_ENV.filter(key => !process.env[key]);
 if (missing.length > 0) {
   console.error(`❌ Missing environment variables: ${missing.join(', ')}`);
@@ -37,6 +38,12 @@ const admin       = require('./src/commands/admin');
 const skip        = require('./src/commands/skip');
 const testlaporan = require('./src/commands/testlaporan');
 const statistik   = require('./src/commands/statistik');
+// Channel Learning System Commands
+const highlight = require('./src/commands/highlight');
+const edukasi = require('./src/commands/edukasi');
+const studycase = require('./src/commands/studycase');
+const notice = require('./src/commands/notice');
+const testprogress = require('./src/commands/testprogress');
 
 setup.register(bot);
 daftar.register(bot);
@@ -47,6 +54,11 @@ admin.register(bot);
 skip.register(bot);
 testlaporan.register(bot);
 statistik.register(bot);
+highlight.register(bot);
+edukasi.register(bot);
+studycase.register(bot);
+notice.register(bot);
+testprogress.register(bot);
 
 // ==========================
 // ⏰ CRON JOBS

@@ -92,8 +92,37 @@ async function dbQuery(queryFn) {
   return data;
 }
 
+// ==========================
+// 📌 COMMAND PATTERN & CHANNEL HEADER
+// ==========================
+
+/**
+ * Buat regex pattern untuk command yang support mention
+ * @param {string} command - Nama command tanpa slash
+ * @returns {RegExp}
+ */
 function commandPattern(command) {
   return new RegExp(`^/${command}(@\\w+)?$`);
+}
+
+/**
+ * Format header untuk channel message berdasarkan tipe
+ * @param {string} type - highlight, edukasi, studycase, notice, progress, stable, reward_*
+ * @returns {string}
+ */
+function formatChannelHeader(type) {
+  const headers = {
+    highlight: '🏆 *BEST RESULT*',
+    edukasi: '⚠️ *TIPS HARI INI*',
+    studycase: '🔍 *PEMBELAJARAN*',
+    notice: '📢 *REMINDER*',
+    progress: '📈 *PROGRESS*',
+    stable: '👌 *STABLE*',
+    reward_consistent: '👏 *CONSISTENT WORK*',
+    reward_improvement: '📈 *IMPROVEMENT*',
+    reward_active: '⚡ *AKTIF HARI INI*'
+  };
+  return headers[type] || `📌 *CHANNEL UPDATE*`;
 }
 
 module.exports = {
@@ -105,5 +134,6 @@ module.exports = {
   isValidPhone,
   normalizePhone,
   dbQuery,
-  commandPattern
+  commandPattern,
+  formatChannelHeader
 };
