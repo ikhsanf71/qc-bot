@@ -3,7 +3,7 @@ const { getToday, escapeMarkdown } = require('../../utils');
 const { isRateLimited, isActiveMember } = require('../middleware');
 const { parseCaption } = require('../services/captionParser');
 const { validateQCUpload, getUserQCStatus } = require('../services/qcValidator');
-const { shouldForwardToHQ } = require('../services/hqFilter');
+const { processAndSendToHQ } = require('../services/hqFilter');
 
 /**
  * Handler foto masuk ke grup
@@ -11,7 +11,7 @@ const { shouldForwardToHQ } = require('../services/hqFilter');
  * - Format caption wajib: Nama - Before/After - Treatment - HH:MM-HH:MM - Outlet
  * - User harus sudah absen dengan status HADIR
  * - Maksimal 1 before dan 1 after per hari
- * - Foto AFTER prioritas akan dikirim ke HQ jika belum lengkap
+ * - Signal-Based HQ: ISSUE (wajib), QUALITY (terbatas 1-2 sample), IGNORE
  */
 async function handleFoto(bot, msg) {
   const chatId = msg.chat.id;
@@ -78,7 +78,7 @@ async function handleFoto(bot, msg) {
   const fileId = photos[photos.length - 1].file_id;
 
   // 6. Simpan foto ke database dengan data terstruktur
-  const { error: insertError } = await supabase
+  const { data: insertedData, error: insertError } = await supabase
     .from('qc_logs')
     .insert({
       outlet_id: chatId,
@@ -91,18 +91,22 @@ async function handleFoto(bot, msg) {
       end_time: parsed.endTime,
       treatment: parsed.treatment,
       outlet_name: parsed.outletName,
-      parsed: true
-    });
+      parsed: true,
+      is_quality_sent: false
+    })
+    .select();
 
   if (insertError) {
     console.error('[FOTO] Error insert:', insertError.message);
     return bot.sendMessage(chatId, '⚠️ Gagal menyimpan foto. Coba lagi.');
   }
 
+  const qcLogId = insertedData?.[0]?.id;
+
   // 7. Cek kelengkapan QC user setelah upload
   const qcStatus = await getUserQCStatus(chatId, userId, today);
 
-  // 8. Buat pesan response
+  // 8. Buat pesan response untuk user
   let response = `✅ Foto *${parsed.type}* berhasil dicatat!\n`;
   response += `📌 Treatment: ${escapeMarkdown(parsed.treatment)}\n`;
   response += `⏰ Waktu: ${parsed.startTime} - ${parsed.endTime}\n`;
@@ -118,31 +122,29 @@ async function handleFoto(bot, msg) {
 
   await bot.sendMessage(chatId, response, { parse_mode: 'Markdown' });
 
-  // 9. Filter dan kirim ke HQ (hanya foto AFTER prioritas)
-  const shouldForward = await shouldForwardToHQ(chatId, userId, parsed.type);
-  if (shouldForward && process.env.HQ_GROUP_ID) {
-    try {
-      const hqCaption = `⚠️ *PRIORITAS - QC Tidak Lengkap*\n` +
-        `━━━━━━━━━━━━━━━━━━━━━━━\n` +
-        `📸 *Foto QC dari outlet ${escapeMarkdown(outlet.name)}*\n` +
-        `━━━━━━━━━━━━━━━━━━━━━━━\n` +
-        `👤 *Staff:* ${escapeMarkdown(parsed.name)}\n` +
-        `🛠️ *Treatment:* ${escapeMarkdown(parsed.treatment)}\n` +
-        `⏰ *Waktu:* ${parsed.startTime} - ${parsed.endTime}\n` +
-        `📌 *Status:* HANYA AFTER (tanpa dokumentasi BEFORE)\n` +
-        `━━━━━━━━━━━━━━━━━━━━━━━\n` +
-        `⚠️ Staff ini mengirim hasil akhir tanpa foto proses awal.\n` +
-        `Perlu diingatkan untuk melengkapi dokumentasi.`;
+  // 9. SIGNAL-BASED HQ: Proses dan kirim ke HQ berdasarkan klasifikasi
+  //    - ISSUE SIGNAL: wajib kirim (AFTER tanpa BEFORE)
+  //    - QUALITY SIGNAL: kirim max 1-2 sample per outlet per hari
+  //    - IGNORE: tidak dikirim
+  const userName = parsed.name;
+  const qcData = {
+    outletName: parsed.outletName,
+    treatment: parsed.treatment,
+    startTime: parsed.startTime,
+    endTime: parsed.endTime,
+    type: parsed.type
+  };
 
-      await bot.sendPhoto(process.env.HQ_GROUP_ID, fileId, {
-        caption: hqCaption,
-        parse_mode: 'Markdown'
-      });
-      console.log(`[HQ FORWARD] Foto dari user ${userId} di outlet ${outlet.name} dikirim ke HQ`);
-    } catch (err) {
-      console.error('[HQ FORWARD] Error:', err.message);
-    }
-  }
+  await processAndSendToHQ(
+    bot,
+    chatId,
+    userId,
+    userName,
+    qcData,
+    today,
+    qcLogId,
+    outlet.name
+  );
 }
 
 /**

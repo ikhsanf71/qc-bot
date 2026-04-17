@@ -1,72 +1,65 @@
-const supabase = require('../../db');
-const { getToday } = require('../../utils');
-const { getUserQCStatus } = require('./qcValidator');
-const { STATUS } = require('../config/constants');
+// src/services/hqFilter.js
+const { classifySignal } = require('./signalClassifier');
+const { canSendQualitySample, markQualitySent } = require('./qualityQueue');
+const { formatIssueSignal, formatQualitySignal, sendToHQ } = require('./hqSender');
 
-async function shouldForwardToHQ(outletId, userId, type) {
-  if (type !== 'after') return false;
-  const today = getToday();
-  const { isComplete } = await getUserQCStatus(outletId, userId, today);
-  return !isComplete; // hanya kirim jika belum lengkap (prioritas)
-}
-
-async function generateHQProblemSummary(outletId, outletName, date) {
-  const { data: absenList } = await supabase
-    .from('absen')
-    .select(`telegram_id, status, users(full_name)`)
-    .eq('outlet_id', outletId)
-    .eq('date', date);
-  if (!absenList || absenList.length === 0) return null;
-
-  const { data: qcLogs } = await supabase
-    .from('qc_logs')
-    .select('telegram_id, type, parsed')
-    .eq('outlet_id', outletId)
-    .eq('date', date);
-
-  const { data: skipLogs } = await supabase
-    .from('qc_skips')
-    .select('telegram_id, reason')
-    .eq('outlet_id', outletId)
-    .eq('date', date);
-
-  const qcMap = {};
-  qcLogs?.forEach(log => {
-    if (!qcMap[log.telegram_id]) qcMap[log.telegram_id] = { before: false, after: false, formatError: !log.parsed };
-    if (log.type === 'before') qcMap[log.telegram_id].before = true;
-    if (log.type === 'after') qcMap[log.telegram_id].after = true;
-  });
-  const skipMap = {};
-  skipLogs?.forEach(s => { skipMap[s.telegram_id] = s.reason; });
-
-  let masalah = [], tidakHadir = [];
-
-  for (const absen of absenList) {
-    const userId = absen.telegram_id;
-    const userName = absen.users?.full_name || `User ${userId}`;
-    const status = absen.status;
-    const qc = qcMap[userId] || { before: false, after: false, formatError: false };
-    const skipReason = skipMap[userId];
-
-    if (status === STATUS.HADIR) {
-      if (!qc.before && !qc.after && !skipReason) masalah.push(`• ${userName} — TIDAK ADA FOTO & TIDAK SKIP`);
-      else if (!qc.before && !qc.after && skipReason) masalah.push(`• ${userName} — SKIP: ${skipReason.substring(0, 50)}`);
-      else if (qc.before && !qc.after) masalah.push(`• ${userName} — HANYA BEFORE, BELUM AFTER`);
-      else if (!qc.before && qc.after) masalah.push(`• ${userName} — HANYA AFTER (TANPA BEFORE) ⚠️ PRIORITAS`);
-      else if (qc.formatError) masalah.push(`• ${userName} — FORMAT FOTO SALAH`);
+/**
+ * Proses dan kirim ke HQ berdasarkan klasifikasi sinyal
+ * @returns {Promise<boolean>} apakah sudah dikirim
+ */
+async function processAndSendToHQ(bot, outletId, userId, userName, qcData, date, qcLogId) {
+  const { type, reason, metadata } = await classifySignal(outletId, userId, qcData, date);
+  const { outletName, treatment, startTime, endTime } = qcData;
+  const timeRange = startTime && endTime ? `${startTime}-${endTime}` : null;
+  
+  // 🔴 ISSUE SIGNAL: WAJIB KIRIM
+  if (type === 'ISSUE') {
+    const message = formatIssueSignal(userName, outletName, reason, treatment, timeRange);
+    await sendToHQ(bot, message);
+    console.log(`[HQ] ISSUE dikirim: ${userName} - ${reason}`);
+    return true;
+  }
+  
+  // 🟢 QUALITY SIGNAL: kirim jika belum mencapai limit
+  if (type === 'QUALITY') {
+    const canSend = await canSendQualitySample(outletId, date, 2); // max 2 sample per hari
+    if (canSend) {
+      // Cek apakah ini sample pertama hari ini (untuk kasih badge "FIRST QC")
+      const isFirst = await isFirstQualityToday(outletId, date);
+      const message = formatQualitySignal(userName, outletName, treatment, timeRange, isFirst);
+      await sendToHQ(bot, message);
+      await markQualitySent(outletId, userId, date, qcLogId);
+      console.log(`[HQ] QUALITY dikirim: ${userName} (sample ke-${await getQualityCount(outletId, date)})`);
+      return true;
     } else {
-      const statusText = status === STATUS.IZIN ? 'Izin' : (status === STATUS.SAKIT ? 'Sakit' : 'Libur');
-      tidakHadir.push(`• ${userName} — ${statusText}`);
+      console.log(`[HQ] QUALITY di-IGNORE (limit tercapai): ${userName}`);
     }
   }
-
-  if (masalah.length === 0 && tidakHadir.length === 0) return null;
-
-  let summary = `⚠️ *MASALAH HARIAN* - ${outletName}\n📅 ${date}\n\n`;
-  if (masalah.length) summary += `*🔴 PRIORITAS:*\n${masalah.join('\n')}\n\n`;
-  if (tidakHadir.length) summary += `*🟡 Tidak Hadir:*\n${tidakHadir.join('\n')}\n\n`;
-  summary += `📌 Foto AFTER prioritas dikirim terpisah.`;
-  return summary;
+  
+  // ⚪ IGNORE
+  console.log(`[HQ] IGNORE: ${userName} - ${reason || 'Not priority'}`);
+  return false;
 }
 
-module.exports = { shouldForwardToHQ, generateHQProblemSummary };
+// Helper functions
+async function isFirstQualityToday(outletId, date) {
+  const { count } = await supabase
+    .from('qc_logs')
+    .select('id', { count: 'exact', head: true })
+    .eq('outlet_id', outletId)
+    .eq('date', date)
+    .eq('is_quality_sent', true);
+  return count === 0;
+}
+
+async function getQualityCount(outletId, date) {
+  const { count } = await supabase
+    .from('qc_logs')
+    .select('id', { count: 'exact', head: true })
+    .eq('outlet_id', outletId)
+    .eq('date', date)
+    .eq('is_quality_sent', true);
+  return count || 0;
+}
+
+module.exports = { processAndSendToHQ };
