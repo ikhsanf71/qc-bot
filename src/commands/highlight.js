@@ -10,15 +10,31 @@ const { sendHighlightToChannel } = require('../services/channelSender');
 const { getDefaultHighlightNote } = require('../services/messageBank');
 
 async function handleHighlight(bot, msg, match) {
+  // Validasi awal dengan logging
+  console.log('[HIGHLIGHT] Raw message:', {
+    hasMsg: !!msg,
+    msgType: msg?.chat?.type,
+    msgText: msg?.text,
+    hasReplyTo: !!msg?.reply_to_message
+  });
+  
+  if (!msg || !msg.from || !msg.chat) {
+    console.error('[HIGHLIGHT] Invalid message object - missing msg/from/chat');
+    return;
+  }
+
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  const note = match[1]?.trim() || null;
+  const note = match && match[1] ? match[1].trim() : null;
 
   // Cek apakah command ini adalah reply ke pesan
   if (!msg.reply_to_message) {
+    console.log('[HIGHLIGHT] No reply_to_message');
     return bot.sendMessage(chatId, '❌ Harus reply ke foto QC yang ingin di-highlight!');
   }
-
+  
+  // ... lanjutkan kode yang sudah ada
+}
   const repliedMsg = msg.reply_to_message;
   
   // Cek apakah yang di-reply adalah foto

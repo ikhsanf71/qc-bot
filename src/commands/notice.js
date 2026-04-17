@@ -9,22 +9,32 @@ const { sendNoticeToChannel } = require('../services/channelSender');
 const { getEdukasiMessage } = require('../services/messageBank');
 
 async function handleNotice(bot, msg, match) {
+  if (!msg || !msg.chat) {
+    console.error('[NOTICE] Invalid message object');
+    return;
+  }
+
   const chatId = msg.chat.id;
-  let text = match[1]?.trim();
+  
+  let text = null;
+  if (match && match[1]) {
+    text = match[1]?.trim();
+  }
 
   if (!text) {
     text = getEdukasiMessage('notice');
   }
 
   if (!text) {
-    return bot.sendMessage(chatId, '❌ Format: /notice <teks pengumuman>\nContoh: /notice Biar kerjaan lebih rapi, pastikan foto before tidak terlewat');
+    return bot.sendMessage(chatId, '❌ Format: /notice <teks pengumuman>');
   }
 
+  console.log(`[NOTICE] Mengirim ke channel: ${text.substring(0, 50)}...`);
+  
   const success = await sendNoticeToChannel(bot, text);
   
   if (success) {
     await bot.sendMessage(chatId, `✅ Notice berhasil dikirim ke channel!`);
-    console.log(`[NOTICE] Dikirim oleh trainer ${msg.from.id}: ${text.substring(0, 50)}...`);
   } else {
     await bot.sendMessage(chatId, '⚠️ Gagal mengirim ke channel. Cek CHANNEL_ID di .env');
   }
